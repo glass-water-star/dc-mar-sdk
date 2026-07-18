@@ -1,0 +1,42 @@
+name: Create GitHub Release from changelog
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create_release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract changelog for tag
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF#refs/tags/v}
+          # Extract the changelog section for the exact version. Stop at the next '## [' header.
+          awk -v ver="$VERSION" '
+            BEGIN{found=0}
+            /^## \[/{ if(found && /^## \[/){exit} }
+            { if($0 ~ ("## \\"" ver "\\"]")){found=1; print; next} if(found) print }
+          ' CHANGELOG.md > changelog.md
+
+          if [ ! -s changelog.md ]; then
+            echo "No changelog entry found for $VERSION" >&2
+            exit 1
+          fi
+
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          cat changelog.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Create GitHub release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

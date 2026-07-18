@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DC MAR SDK Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1>DC MAR SDK Insights Dashboard</h1>
+      <p>Pure Python FastAPI dashboard for telemetry, cache, and endpoint insights.</p>
+    </header>
+
+    <section class="controls card">
+      <label for="hours">Window</label>
+      <select id="hours">
+        <option value="1">1h</option>
+        <option value="24" selected>24h</option>
+        <option value="168">7d</option>
+      </select>
+      <label for="auto-refresh">
+        <input id="auto-refresh" type="checkbox" checked>
+        Auto refresh (30s)
+      </label>
+      <button id="refresh-btn" type="button">Refresh</button>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Overview</h2>
+        <div id="overview" class="kv"></div>
+      </article>
+
+      <article class="card">
+        <h2>Cache</h2>
+        <div id="cache" class="kv"></div>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Anomalies</h2>
+        <ul id="anomalies" class="list"></ul>
+      </article>
+
+      <article class="card">
+        <h2>Timeseries</h2>
+        <pre id="timeseries" class="json"></pre>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Endpoint Insights</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Requests</th>
+            <th>Error Rate</th>
+            <th>Avg Latency</th>
+          </tr>
+        </thead>
+        <tbody id="endpoint-rows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

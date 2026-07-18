@@ -1,0 +1,17 @@
+# CODEOWNERS for dc-mar-sdk
+# Assigns code owners for the repository. See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Owners for everything by default
+* @masonstoecker
+
+# Owners for source code
+/src/ @masonstoecker
+
+# Owners for docs and release files
+/docs/ *.md @masonstoecker
+README.md @masonstoecker
+RELEASE_POLICY.md @masonstoecker
+CONTRIBUTING.md @masonstoecker
+
+# Owners for .github workflows and templates
+/.github/ @masonstoecker

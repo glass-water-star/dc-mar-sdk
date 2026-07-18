@@ -1,0 +1,63 @@
+name: smoke
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "run" to confirm manual smoke test'
+        required: true
+      allowed_actors:
+        description: 'Optional comma-separated allowed actor logins (empty = no restriction)'
+        required: false
+        default: ''
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Validate inputs and secrets
+        run: |
+          if [ "${{ inputs.confirm }}" != "run" ]; then
+            echo "Confirm input not set to 'run' - aborting."
+            exit 1
+          fi
+          if [ -z "${{ secrets.DC_MAR_API_KEY }}" ]; then
+            echo "Missing required secret: DC_MAR_API_KEY"
+            exit 1
+          fi
+          if [ -n "${{ inputs.allowed_actors }}" ]; then
+            allowed="${{ inputs.allowed_actors }}"
+            actor="${{ github.actor }}"
+            IFS=',' read -ra arr <<< "$allowed"
+            ok=0
+            for a in "${arr[@]}"; do
+              a_trim="$(echo $a | xargs)"
+              if [ "$a_trim" = "$actor" ]; then
+                ok=1
+                break
+              fi
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "Actor $actor is not allowed to run this workflow (allowed: $allowed)"
+              exit 1
+            fi
+          fi
+      - name: Install uv and sync environment
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv sync
+      - name: Run smoke tests
+        env:
+          DC_MAR_API_KEY: ${{ secrets.DC_MAR_API_KEY }}
+          DC_RUN_SMOKE_TESTS: 1
+        run: uv run pytest tests/test_drift_smoke.py -q

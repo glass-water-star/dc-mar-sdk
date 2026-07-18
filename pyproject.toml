@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dc-mar-sdk"
+version = "0.1.0"
+description = "Python SDK for DC DataGate Master Address Repository (MAR) API with caching and telemetry"
+authors = [{ name = "Mason Stoecker" }]
+requires-python = ">=3.11"
+license = { text = "MIT" }
+readme = { file = "README.md", content-type = "text/markdown" }
+
+urls = { "Homepage" = "https://github.com/masonstoecker/dc-mar-sdk", "Repository" = "https://github.com/masonstoecker/dc-mar-sdk", "Bug Tracker" = "https://github.com/masonstoecker/dc-mar-sdk/issues" }
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Typing :: Typed",
+    "Topic :: Software Development :: Libraries",
+]
+
+keywords = ["dc", "mar", "geocoding", "sdk", "api", "addresses"]
+
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "httpx>=0.24.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "jinja2>=3.1.0",
+    "sqlalchemy>=2.0",
+    "typer>=0.9.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.9.0",
+    "ruff>=0.10.0",
+    "mypy>=1.5.0",
+]
+redis = [
+    "redis>=5.0.0",
+]
+# Optional dependencies for operational tooling (ops). Keep lightweight by default.
+ops = [
+    "python-dotenv>=1.0",
+]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+dc-mar-sdk-cli = "dc_mar_sdk.cli.main:app"
+dc-mar-sdk-release = "dc_mar_sdk.scripts.release:main"
+dc-mar-sdk-geocode-collect = "dc_mar_sdk.scripts.geocode_quality_collect:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=src/dc_mar_sdk --cov-report=term-missing"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+select = ["E", "F", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dc_mar_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/dc_mar_sdk/**",
+  "README.md",
+  "LICENSE",
+  "CHANGELOG.md",
+  "pyproject.toml",
+]
