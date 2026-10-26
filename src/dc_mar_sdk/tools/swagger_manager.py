@@ -10,10 +10,11 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
+from typing_extensions import TypedDict
 
 
 class SwaggerVersion(TypedDict):

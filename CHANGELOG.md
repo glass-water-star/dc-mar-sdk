@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on "Keep a Changelog" (https://keepachangelog.com/en/1.0.0/) and this project adheres to Semantic Versioning (https://semver.org/).
 
 ## [Unreleased]
+
+## [0.1.1] - 2026-10-25
+### Fixed
+- Restored Python 3.11 dashboard compatibility by using
+  `typing_extensions.TypedDict` for FastAPI response schemas.
+
+## [0.1.0] - 2026-10-25
 ### Added
 - Release documentation (RELEASE_POLICY.md) and changelog scaffold.
 - Release quality gate runner: `dc-mar-sdk-release` (preferred public script name; legacy `dc-mar-sdk-release` still available) — runs lint + unit tests + optional smoke test.
@@ -25,8 +32,7 @@ The format is based on "Keep a Changelog" (https://keepachangelog.com/en/1.0.0/)
 - Committed the uv lockfile required by CI and corrected release-note extraction
   for tag-triggered GitHub releases.
 
-## [0.1.0] - 2026-07-18
-### Added
+### Initial release
 - Initial public release and library scaffolding:
   - Type-safe API client generated from the OpenAPI spec
   - Pluggable caching backends (SQLite default, Redis, in-memory)
