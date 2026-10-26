@@ -8,6 +8,8 @@ The format is based on "Keep a Changelog" (https://keepachangelog.com/en/1.0.0/)
 ### Added
 - Release documentation (RELEASE_POLICY.md) and changelog scaffold.
 - Release quality gate runner: `dc-mar-sdk-release` (preferred public script name; legacy `dc-mar-sdk-release` still available) — runs lint + unit tests + optional smoke test.
+- CLI command discovery/contract rejection and release-gate hygiene/check
+  sequencing regression coverage.
 
 ### Changed
 - Replaced Black with Ruff formatting, expanded Ruff lint coverage, and made
