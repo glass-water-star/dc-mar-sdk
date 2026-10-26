@@ -1,147 +1,101 @@
-================================================================================
-                    SWAGGER DRIFT DETECTION REPORT
-================================================================================
+DC MAR v2.2 API COVERAGE AND DRIFT REPORT
+===========================================
 
-Project: DC MAR SDK (Master Address Repository)
-API Version: v2.2
-Report Date: 2026-07-12
-Status: ✅ SYSTEM OPERATIONAL with Known Drift
+Source of truth: https://datagate.dc.gov/mar/open/swagger/v2.2/swagger.json
+Probe date: 2026-10-25
+Scope: Only the DC MAR API was contacted.
 
-================================================================================
-                              EXECUTIVE SUMMARY
-================================================================================
+CONTRACT COVERAGE
+-----------------
 
-A drift detection system has been successfully implemented to continuously
-verify that actual API responses match the official Swagger specification.
+The source contract contains 33 operations:
 
-KEY FINDINGS:
-  ✓ 3/4 core endpoints match specification
-  ✗ 1/4 endpoints have documented divergence (handled with workaround)
-  ⚠️ 3 endpoints have minor schema parsing warnings (non-critical)
+* autocomplete: 3
+* locationbatch: 4
+* locations: 14
+* ssls: 4
+* units: 6
+* zone: 2
 
-RECOMMENDATION: Deploy drift checker to CI/CD for ongoing monitoring
+All 33 are available through MARClient.request_operation(method, operation,
+path_parameters=..., query_parameters=..., json_body=...). The method validates
+the supplied method/path template against the authoritative v2.2 operation
+manifest, renders path values safely, sends the documented HTTP method, and
+returns unmodified JSON so fields absent from the source schemas are retained.
 
-================================================================================
-                              DETAILED RESULTS
-================================================================================
+All 33 are also available through:
 
-[1] /api/v2.2/autocomplete/{address}
-────────────────────────────────────────────────────────────────────────────
+  dc-mar-cli api-request --method METHOD --operation PATH_TEMPLATE
 
-Status: ❌ MISMATCH (but HANDLED)
+Use --path-parameter KEY=VALUE, --query-parameter KEY=VALUE, and --body JSON
+as appropriate. The command accepts only the 33 method/path pairs defined by
+the authoritative contract.
 
-Swagger Specification:
-  - Returns: array[string]
-  - Example: ["1600 PENNSYLVANIA AVENUE NW", "1600 PENNSYLVANIA AVENUE SE"]
+LIVE PROBE RESULTS
+------------------
 
-Actual API Response:
-  - Returns: object with Result/Success/Message
-  - Example: {
-      "Result": ["1600 PENNSYLVANIA AVENUE NW", "1600 PENNSYLVANIA AVENUE SE"],
-      "Success": true,
-      "Message": null
-    }
+A complete probe against all 33 source-contract operations passes with zero
+warnings and zero critical errors. The drift detector applies strict
+live-conformance profiles to the verified upstream differences below, so an
+unexpected envelope, batch summary, or dynamic result still fails the probe.
 
-Analysis:
-  This is a BREAKING DIFFERENCE between Swagger documentation and implementation.
-  The API wraps results in an object with status information, but the spec
-  documents it as returning a direct array.
+1. GET /api/v2.2/autocomplete/{address}
+2. POST /api/v2.2/autocomplete/{address}
+3. POST /api/v2.2/autocomplete
 
-Current Workaround (in src/dc_mar_sdk/client/mar.py):
-  ✓ Client automatically extracts "Result" field
-  ✓ No breaking changes to users
-  ✓ Gracefully handles both formats
+   Source contract: array[string]
+   Actual response: {"Result": [...], "Success": true, "Message": null}
 
-Impact: NONE (transparent to users)
+   The live API wraps autocomplete results in a status envelope. The live
+   conformance profile requires Result/Success/Message and a string Result list.
+   Any other response shape is a drift failure.
 
+4. POST /api/v2.2/locations/{address}/{zones}/{geo}
 
-[2] /api/v2.2/units/{marid}
-────────────────────────────────────────────────────────────────────────────
+   Source contract: array
+   Actual response: {"Result": ..., "Success": true, "Message": null}
 
-Status: ✅ WORKS (minor schema issue)
+   The live API uses the same status-envelope shape rather than the documented
+   direct array. The profile requires a valid MAR envelope.
 
-Finding: Schema parsing warning (non-blocking)
-  - Endpoint responds with valid JSON structure
-  - Response format appears stable
-  - No type mismatches detected
+5. POST /api/v2.2/locations/{geo}
 
-Recommendation: Monitor - not urgent
+   Source contract: LocationResult with JToken fields.
+   Actual response: an envelope whose Result contains an object. The source
+   defines JToken recursively as an array, so it cannot describe this valid
+   live object shape. The profile requires that object-valued Result.
 
+LOCATIONBATCH OBSERVATION
+-------------------------
 
-[3] /api/v2.2/ssls
-────────────────────────────────────────────────────────────────────────────
+All four documented locationbatch variants return a processing summary:
+ChunkNumber (integer), ProcessTime (string), and Results (a list of MAR
+envelopes containing location objects). `LocationBatchResponse` models this
+live shape and the conformance profile rejects any deviation.
 
-Status: ✅ WORKS (minor schema issue)
+SOURCE CONTRACT DEFECTS
+-----------------------
 
-Finding: Schema parsing warning (non-blocking)
-  - Endpoint responds with valid JSON structure
-  - Response format appears stable
-  - No type mismatches detected
+* 25 of 33 operations have no operationId.
+* GET and POST /api/v2.2/locations/{latlong}/{zones}/{geo} share the same
+  operationId in the source document.
+* SSL, unit, and zone success responses have no response-content schemas.
 
-Recommendation: Monitor - not urgent
+The checked-in swagger/swagger.json is pinned to the source document retrieved
+on the probe date. tests/test_operations.py verifies that the operation manifest
+matches every GET and POST entry in that pinned contract.
 
+TYPED CLI PARAMETER NOTE
+------------------------
 
-[4] /api/v2.2/zone/{zone}
-────────────────────────────────────────────────────────────────────────────
+The `/locations/.../{zones}/...` path segment is a zone-type string, not a
+boolean. Typed `locations address` and `locations coordinates` commands accept
+`--zones ZONE_TYPE` (for example, `--zones Ward`) and send `false` when omitted.
 
-Status: ✅ WORKS (minor schema issue)
+SMOKE-PROBE PAYLOAD NOTE
+------------------------
 
-Finding: Schema parsing warning (non-blocking)
-  - Endpoint responds with valid JSON structure
-  - Response format appears stable
-  - No type mismatches detected
-
-Recommendation: Monitor - not urgent
-
-================================================================================
-                           RECOMMENDATIONS
-================================================================================
-
-SHORT TERM (Now):
-  1. ✅ Use drift detection tool to verify API behavior
-  2. ✅ Known issue is already handled by client
-  3. ✅ Continue monitoring for upstream changes
-
-MEDIUM TERM (This month):
-  1. Integrate drift-check into CI/CD pipeline (runs weekly)
-  2. Update Swagger spec from DC Government if available
-  3. Test all 21+ endpoints in the API for comprehensive coverage
-
-LONG TERM (Ongoing):
-  1. Subscribe to API changelog notifications
-  2. Maintain drift detection test suite
-  3. Document all deviations between spec and implementation
-
-================================================================================
-                            IMPLEMENTATION GUIDE
-================================================================================
-
-RUNNING DRIFT DETECTION:
-
-Via CLI:
-  $ uv run dc-mar-sdk-cli drift-check --api-key YOUR_KEY
-
-Example Output:
-  ✓ /api/v2.2/autocomplete/{address}  (PASS - wrapped response handled)
-  ✓ /api/v2.2/units/{marid}           (PASS - stable)
-  ✓ /api/v2.2/ssls                    (PASS - stable)
-  ✓ /api/v2.2/zone/{zone}             (PASS - stable)
-
-FILES:
-  - src/dc_mar_sdk/tools/drift_detector.py  (Implementation)
-  - src/dc_mar_sdk/cli/main.py              (CLI integration)
-  - DRIFT_DETECTION.md                     (Full documentation)
-  - tools/drift_report.txt                 (This file)
-
-================================================================================
-                              CONCLUSION
-================================================================================
-
-The DC MAR SDK is stable and production-ready. Known divergence between
-Swagger spec and implementation has been identified and transparently
-handled in the client library. The drift detection system ensures future
-changes will be caught automatically.
-
-STATUS: ✅ APPROVED FOR PRODUCTION
-
-Next Action: Deploy to production and integrate drift-check into CI/CD
+The source contract describes JToken request bodies recursively as arrays, but
+the live location POST operations require an object with an `address` key. The
+drift probe uses `{"address": "1600 Pennsylvania"}` for those endpoints so it
+tests a valid live request instead of reporting a schema-induced false failure.

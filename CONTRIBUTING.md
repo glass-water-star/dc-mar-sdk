@@ -19,7 +19,7 @@ Optional: if your environment provides the project task runner, you can use:
 
    uv sync
 
-Note: The public import namespace is `dc_mar_sdk`. CLI entry-points are `dc-mar-sdk-cli`, `dc-mar-sdk-release`, and `dc-mar-sdk-geocode-collect`.
+Note: The public import namespace is `dc_mar_sdk`. CLI entry-points are `dc-mar-cli`, `dc-mar-sdk-release`, and `dc-mar-sdk-geocode-collect`.
 
 ## Common commands
 
@@ -33,8 +33,8 @@ Note: The public import namespace is `dc_mar_sdk`. CLI entry-points are `dc-mar-
 
 - Formatting and linting:
 
-  uv run black src/ tests/
-  uv run ruff check src/ tests/
+  uv run ruff format .
+  uv run ruff check .
   uv run mypy src/
 
 - Run the dashboard locally:
@@ -52,7 +52,7 @@ Before opening a PR, ensure:
 
 - [ ] The PR references a related issue or clearly describes the change.
 - [ ] All tests pass locally (uv run pytest) and new behavior is covered by tests.
-- [ ] Code is formatted (black) and lint-free (ruff).
+- [ ] Code is Ruff-formatted and lint-free.
 - [ ] Type checks pass (mypy) where applicable.
 - [ ] The PR follows the provided template and includes a clear description, testing notes, and migration notes if needed.
 
@@ -72,5 +72,4 @@ Contact options
 - For urgent or sensitive matters (security reports, release coordination), see the CODEOWNERS file or open a private GitHub Security Advisory. Do not post security issues publicly.
 
 Response expectations: maintainers aim to acknowledge issues or requests within 3 business days. If you need a faster response, mention it in the issue title and label it `urgent`.
-
 

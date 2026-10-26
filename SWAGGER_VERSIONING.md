@@ -18,7 +18,7 @@ The Swagger Versioning System automatically manages API specification versions, 
 ### View All Versions
 
 ```bash
-uv run dc-mar-sdk-cli swagger-list
+uv run dc-mar-cli swagger-list
 ```
 
 Output:
@@ -36,7 +36,7 @@ Available Swagger Versions
 ### Auto-Fix Drift
 
 ```bash
-uv run dc-mar-sdk-cli swagger-fix --api-key YOUR_KEY
+uv run dc-mar-cli swagger-fix --api-key YOUR_KEY
 ```
 
 This will:
@@ -49,10 +49,10 @@ This will:
 
 ```bash
 # See available versions
-uv run dc-mar-sdk-cli swagger-reset
+uv run dc-mar-cli swagger-reset
 
 # Reset to specific version
-uv run dc-mar-sdk-cli swagger-reset --version 1
+uv run dc-mar-cli swagger-reset --version 1
 ```
 
 ---
@@ -170,13 +170,13 @@ When DC Government updates their API:
 
 ```bash
 # Detect changes
-uv run dc-mar-sdk-cli drift-check --api-key KEY
+uv run dc-mar-cli drift-check --api-key KEY
 
 # Auto-fix to match new API
-uv run dc-mar-sdk-cli swagger-fix --api-key KEY
+uv run dc-mar-cli swagger-fix --api-key KEY
 
 # Verify the fix
-uv run dc-mar-sdk-cli drift-check --api-key KEY
+uv run dc-mar-cli drift-check --api-key KEY
 ```
 
 ### 2. Rollback on Bad Update
@@ -185,13 +185,13 @@ If an update breaks your code:
 
 ```bash
 # See what versions are available
-uv run dc-mar-sdk-cli swagger-list
+uv run dc-mar-cli swagger-list
 
 # Restore to last known-good version
-uv run dc-mar-sdk-cli swagger-reset --version 1
+uv run dc-mar-cli swagger-reset --version 1
 
 # Verify stability
-uv run dc-mar-sdk-cli drift-check --api-key KEY
+uv run dc-mar-cli drift-check --api-key KEY
 ```
 
 ### 3. Development Workflow
@@ -200,7 +200,7 @@ uv run dc-mar-sdk-cli drift-check --api-key KEY
 # 1. Make changes to client code
 # 2. Run against new API version
 # 3. Auto-fix the Swagger to match
-uv run dc-mar-sdk-cli swagger-fix --api-key KEY
+uv run dc-mar-cli swagger-fix --api-key KEY
 
 # 4. Commit the new swagger
 git add swagger/swagger.json
@@ -247,7 +247,7 @@ When auto-fixing, the system infers schemas by analyzing responses:
 List all available Swagger versions.
 
 ```bash
-uv run dc-mar-sdk-cli swagger-list
+uv run dc-mar-cli swagger-list
 ```
 
 Options: None
@@ -257,7 +257,7 @@ Options: None
 Auto-fix Swagger spec drift based on actual API responses.
 
 ```bash
-uv run dc-mar-sdk-cli swagger-fix --api-key YOUR_KEY [--verbose]
+uv run dc-mar-cli swagger-fix --api-key YOUR_KEY [--verbose]
 ```
 
 Options:
@@ -269,7 +269,7 @@ Options:
 Reset to a specific Swagger version.
 
 ```bash
-uv run dc-mar-sdk-cli swagger-reset [--version N]
+uv run dc-mar-cli swagger-reset [--version N]
 ```
 
 Options:
@@ -312,11 +312,11 @@ jobs:
       - uses: actions/setup-python@v4
       
       - name: Check for drift
-        run: uv run dc-mar-sdk-cli drift-check --api-key ${{ secrets.DC_MAR_API_KEY }}
+        run: uv run dc-mar-cli drift-check --api-key ${{ secrets.DC_MAR_API_KEY }}
       
       - name: Auto-fix if drifted
         if: failure()
-        run: uv run dc-mar-sdk-cli swagger-fix --api-key ${{ secrets.DC_MAR_API_KEY }}
+        run: uv run dc-mar-cli swagger-fix --api-key ${{ secrets.DC_MAR_API_KEY }}
       
       - name: Create PR if changes
         if: success()

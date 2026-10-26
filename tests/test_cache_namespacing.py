@@ -1,7 +1,7 @@
 import pytest
 
-from dc_mar_sdk.client.mar import MARClient
 from dc_mar_sdk.cache.backends import InMemoryCache
+from dc_mar_sdk.client.mar import MARClient
 
 
 @pytest.mark.asyncio
@@ -39,4 +39,3 @@ async def test_no_plaintext_api_key_in_key():
     client = MARClient(api_key=secret, cache_backend=InMemoryCache(), enable_telemetry=False)
     key = client._make_cache_key("/x", {"p": "v"})
     assert secret not in key
-

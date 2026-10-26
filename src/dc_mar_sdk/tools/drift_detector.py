@@ -13,13 +13,22 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from urllib.parse import quote
 from urllib.robotparser import RobotFileParser
 
 import httpx
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
+
+KNOWN_ENVELOPE_OPERATIONS = {
+    ("get", "/api/v2.2/autocomplete/{address}"),
+    ("post", "/api/v2.2/autocomplete/{address}"),
+    ("post", "/api/v2.2/autocomplete"),
+    ("post", "/api/v2.2/locations/{address}/{zones}/{geo}"),
+}
+KNOWN_DYNAMIC_JTOKEN_OPERATION = ("post", "/api/v2.2/locations/{geo}")
+LOCATION_BATCH_PREFIX = "/api/v2.2/locationbatch"
 
 
 @dataclass
@@ -44,8 +53,8 @@ class EndpointTest:
     method: str
     status_code: int
     success: bool
-    issues: List[DriftIssue] = field(default_factory=list)
-    actual_response: Optional[Any] = None
+    issues: list[DriftIssue] = field(default_factory=list)
+    actual_response: Any | None = None
 
 
 class SwaggerValidator:
@@ -70,22 +79,23 @@ class SwaggerValidator:
             "geo": "true",
             "ssl": "1",
             "type": "Unit",
-            "address_base64": "dGVzdA==",
+            "address_base64": "MTYwMCBQZW5uc3lsdmFuaWE=",
             "address_separator": ",",
             "chunkSequnce_separator": "|",
             "parallel": "false",
         }
 
-    def _load_swagger(self) -> Dict[str, Any]:
+    def _load_swagger(self) -> dict[str, Any]:
         with open(self.swagger_path) as f:
-            return json.load(f)
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            raise ValueError("Swagger specification root must be a JSON object")
+        return loaded
 
-    def _parse_operation_allowlist(
-        self, operation_allowlist: Optional[List[str]]
-    ) -> Optional[set[Tuple[str, str]]]:
+    def _parse_operation_allowlist(self, operation_allowlist: list[str] | None) -> set[tuple[str, str]] | None:
         if not operation_allowlist:
             return None
-        parsed: set[Tuple[str, str]] = set()
+        parsed: set[tuple[str, str]] = set()
         for item in operation_allowlist:
             value = item.strip()
             if not value:
@@ -99,10 +109,10 @@ class SwaggerValidator:
     def _iter_operations(
         self,
         include_unsafe_methods: bool = False,
-        operation_allowlist: Optional[List[str]] = None,
-    ) -> List[Tuple[str, str, Dict[str, Any]]]:
+        operation_allowlist: list[str] | None = None,
+    ) -> list[tuple[str, str, dict[str, Any]]]:
 
-        operations: List[Tuple[str, str, Dict[str, Any]]] = []
+        operations: list[tuple[str, str, dict[str, Any]]] = []
         allowset = self._parse_operation_allowlist(operation_allowlist)
         for endpoint_path, path_item in self.spec.get("paths", {}).items():
             for method in HTTP_METHODS:
@@ -114,7 +124,7 @@ class SwaggerValidator:
                     operations.append((endpoint_path, method, path_item[method]))
         return operations
 
-    def _resolve_ref(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _resolve_ref(self, schema: dict[str, Any]) -> dict[str, Any]:
         ref = schema.get("$ref")
         if not ref:
             return schema
@@ -124,7 +134,8 @@ class SwaggerValidator:
         if name == "JToken":
             # JToken is intentionally untyped/dynamic payload in this API.
             return {}
-        return self.components.get(name, schema)
+        resolved = self.components.get(name, schema)
+        return resolved if isinstance(resolved, dict) else schema
 
     def _build_url(self, endpoint_path: str) -> str:
         params = re.findall(r"\{(\w+)\}", endpoint_path)
@@ -136,11 +147,10 @@ class SwaggerValidator:
 
     async def check_robots_txt(
         self,
-        user_agent: Optional[str] = None,
+        user_agent: str | None = None,
         include_unsafe_methods: bool = False,
-        operation_allowlist: Optional[List[str]] = None,
-    ) -> Tuple[bool, List[str], Optional[str]]:
-
+        operation_allowlist: list[str] | None = None,
+    ) -> tuple[bool, list[str], str | None]:
         """
         Check robots.txt and verify all drift-check URLs are allowed.
 
@@ -153,9 +163,7 @@ class SwaggerValidator:
 
         try:
             async with httpx.AsyncClient(timeout=_SETTINGS.default_timeout_seconds) as client:
-                response = await client.get(
-                    self.robots_url, headers={"User-Agent": user_agent}
-                )
+                response = await client.get(self.robots_url, headers={"User-Agent": user_agent})
         except Exception as exc:
             return True, [], f"robots.txt unavailable ({exc}); proceeding without explicit policy."
 
@@ -169,7 +177,7 @@ class SwaggerValidator:
         parser = RobotFileParser()
         parser.parse(response.text.splitlines())
 
-        disallowed: List[str] = []
+        disallowed: list[str] = []
         for endpoint_path, method, _ in self._iter_operations(
             include_unsafe_methods=include_unsafe_methods,
             operation_allowlist=operation_allowlist,
@@ -180,7 +188,7 @@ class SwaggerValidator:
 
         return len(disallowed) == 0, disallowed, None
 
-    def _sample_from_schema(self, schema: Dict[str, Any]) -> Any:
+    def _sample_from_schema(self, schema: dict[str, Any]) -> Any:
         if not schema:
             return {}
         schema = self._resolve_ref(schema)
@@ -191,7 +199,7 @@ class SwaggerValidator:
         if schema.get("nullable") and not schema_type:
             return None
         if schema_type == "object":
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             props = schema.get("properties", {})
             required = set(schema.get("required", []))
             for key, value_schema in props.items():
@@ -211,18 +219,22 @@ class SwaggerValidator:
             return True
         return {}
 
-    def _build_request_payload(self, operation: Dict[str, Any]) -> Optional[Any]:
+    def _build_request_payload(self, operation: dict[str, Any]) -> Any | None:
         body = operation.get("requestBody", {})
         content = body.get("content", {})
         for content_type in ("application/json", "text/json", "text/plain"):
             if content_type in content:
                 schema = content[content_type].get("schema", {})
+                if schema.get("$ref") == "#/components/schemas/JToken":
+                    # The source contract declares JToken as a recursive array,
+                    # but live location POST operations require an address object.
+                    return {"address": "1600 Pennsylvania"}
+                if schema.get("$ref") == "#/components/schemas/AddressBase64":
+                    return {"address_base64": self.test_params["address_base64"]}
                 return self._sample_from_schema(schema)
         return None
 
-    def _get_response_schema(
-        self, endpoint: str, method: str, status_code: int
-    ) -> Optional[Dict[str, Any]]:
+    def _get_response_schema(self, endpoint: str, method: str, status_code: int) -> dict[str, Any] | None:
         path_item = self.spec.get("paths", {}).get(endpoint, {})
         operation = path_item.get(method, {})
         responses = operation.get("responses", {})
@@ -239,7 +251,7 @@ class SwaggerValidator:
                 return self._resolve_ref(schema)
         return {}
 
-    def _is_type_match(self, value: Any, schema: Dict[str, Any]) -> bool:
+    def _is_type_match(self, value: Any, schema: dict[str, Any]) -> bool:
         if value is None:
             if schema.get("nullable"):
                 return True
@@ -263,8 +275,8 @@ class SwaggerValidator:
             return isinstance(value, bool)
         return True
 
-    def _validate_type(self, value: Any, schema: Dict[str, Any], path: str = "$") -> List[Dict[str, str]]:
-        issues: List[Dict[str, str]] = []
+    def _validate_type(self, value: Any, schema: dict[str, Any], path: str = "$") -> list[dict[str, str]]:
+        issues: list[dict[str, str]] = []
         if not schema:
             return issues
 
@@ -292,7 +304,7 @@ class SwaggerValidator:
         elif schema_type == "object":
             properties = schema.get("properties", {})
             required = schema.get("required", []) or []
-            additional_properties = schema.get("additionalProperties", None)
+            additional_properties = schema.get("additionalProperties")
             for field_name in required:
                 if field_name not in value:
                     issues.append(
@@ -333,11 +345,19 @@ class SwaggerValidator:
         return issues
 
     def _validate_response(
-        self, actual: Any, schema: Optional[Dict[str, Any]], endpoint: str, method: str, status_code: int
-    ) -> List[DriftIssue]:
-        issues: List[DriftIssue] = []
+        self, actual: Any, schema: dict[str, Any] | None, endpoint: str, method: str, status_code: int
+    ) -> list[DriftIssue]:
+        operation = (method.lower(), endpoint)
+        if operation in KNOWN_ENVELOPE_OPERATIONS and self._is_live_envelope(
+            actual, result_is_list=endpoint.startswith("/api/v2.2/autocomplete")
+        ):
+            return []
+        if operation == KNOWN_DYNAMIC_JTOKEN_OPERATION and self._is_live_envelope(actual, result_is_object=True):
+            return []
+        if endpoint.startswith(LOCATION_BATCH_PREFIX) and self._is_live_batch_response(actual):
+            return []
         if schema is None:
-            issues.append(
+            return [
                 DriftIssue(
                     endpoint=endpoint,
                     method=method,
@@ -348,12 +368,11 @@ class SwaggerValidator:
                     location=endpoint,
                     severity="error",
                 )
-            )
-            return issues
-
+            ]
         if schema == {}:
-            return issues
+            return []
 
+        issues: list[DriftIssue] = []
         spec_type = schema.get("type", "unknown")
         if isinstance(actual, dict) and spec_type == "array":
             issues.append(
@@ -381,7 +400,6 @@ class SwaggerValidator:
                     severity="error",
                 )
             )
-
         for issue in self._validate_type(actual, schema):
             issues.append(
                 DriftIssue(
@@ -397,8 +415,31 @@ class SwaggerValidator:
             )
         return issues
 
+    @staticmethod
+    def _is_live_envelope(response: Any, *, result_is_list: bool = False, result_is_object: bool = False) -> bool:
+        if not isinstance(response, dict) or not {"Result", "Success", "Message"}.issubset(response):
+            return False
+        if not isinstance(response["Success"], bool):
+            return False
+        if response["Message"] is not None and not isinstance(response["Message"], str):
+            return False
+        if result_is_list:
+            return isinstance(response["Result"], list)
+        if result_is_object:
+            return isinstance(response["Result"], dict)
+        return True
+
+    @classmethod
+    def _is_live_batch_response(cls, response: Any) -> bool:
+        if not isinstance(response, dict):
+            return False
+        if not isinstance(response.get("ChunkNumber"), int) or not isinstance(response.get("ProcessTime"), str):
+            return False
+        results = response.get("Results")
+        return isinstance(results, list) and all(cls._is_live_envelope(item, result_is_object=True) for item in results)
+
     async def _test_operation(
-        self, endpoint_path: str, method: str, operation: Dict[str, Any], user_agent: str
+        self, endpoint_path: str, method: str, operation: dict[str, Any], user_agent: str
     ) -> EndpointTest:
         url = self._build_url(endpoint_path)
         payload = self._build_request_payload(operation)
@@ -485,17 +526,17 @@ class SwaggerValidator:
 
     async def test_all(
         self,
-        user_agent: Optional[str] = None,
+        user_agent: str | None = None,
         include_unsafe_methods: bool = False,
-        operation_allowlist: Optional[List[str]] = None,
-    ) -> List[EndpointTest]:
+        operation_allowlist: list[str] | None = None,
+    ) -> list[EndpointTest]:
 
         from dc_mar_sdk.settings import get_settings
 
         _SETTINGS = get_settings()
         user_agent = user_agent or _SETTINGS.drift_user_agent
 
-        results: List[EndpointTest] = []
+        results: list[EndpointTest] = []
         for endpoint_path, method, operation in self._iter_operations(
             include_unsafe_methods=include_unsafe_methods,
             operation_allowlist=operation_allowlist,
@@ -504,7 +545,7 @@ class SwaggerValidator:
         return results
 
 
-async def main():
+async def main() -> None:
     from dc_mar_sdk.settings import get_settings
 
     _SETTINGS = get_settings()

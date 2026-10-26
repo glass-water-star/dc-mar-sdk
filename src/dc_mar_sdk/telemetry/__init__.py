@@ -6,6 +6,6 @@ from .tracking import (
 )
 
 __all__ = [
-    "TelemetryDB",
     "RequestMetrics",
+    "TelemetryDB",
 ]

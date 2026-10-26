@@ -1,7 +1,7 @@
 import pytest
 
-from dc_mar_sdk.client.mar import MARClient
 from dc_mar_sdk.cache.backends import InMemoryCache
+from dc_mar_sdk.client.mar import MARClient
 
 
 class _FakeResponse:
@@ -9,6 +9,7 @@ class _FakeResponse:
         self._payload = payload
         self.status_code = status_code
         self.content = bytes(str(payload), "utf8")
+        self.headers = {}
 
     def json(self):
         return self._payload
@@ -22,7 +23,7 @@ class _FakeClient:
     def __init__(self, payload, status_code=200):
         self._resp = _FakeResponse(payload, status_code=status_code)
 
-    async def get(self, *args, **kwargs):
+    async def request(self, *args, **kwargs):
         return self._resp
 
 

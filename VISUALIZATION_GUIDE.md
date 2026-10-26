@@ -255,7 +255,7 @@ async def analyze_cache_patterns():
 
 ### Option A: Standalone Python Application
 - **Best for**: Individual analysis, research
-- **Setup**: `uv run python explore_api.py`
+- **Setup**: `export DC_MAR_API_KEY="your_api_key"` then `uv run python explore_api.py`
 - **Scalability**: Single machine, limited concurrency
 - **Cost**: Free (only API costs)
 

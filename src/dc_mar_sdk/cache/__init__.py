@@ -3,6 +3,7 @@
 from .backends import (
     CacheBackend,
     CacheManager,
+    CacheStats,
     InMemoryCache,
     RedisCache,
     SQLiteCache,
@@ -11,7 +12,8 @@ from .backends import (
 __all__ = [
     "CacheBackend",
     "CacheManager",
+    "CacheStats",
     "InMemoryCache",
-    "SQLiteCache",
     "RedisCache",
+    "SQLiteCache",
 ]

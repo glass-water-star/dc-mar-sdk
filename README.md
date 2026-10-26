@@ -1,6 +1,6 @@
 # DC MAR SDK
 
-[![Lint](https://github.com/masonstoecker/dc-mar-sdk/actions/workflows/lint.yml/badge.svg)](https://github.com/masonstoecker/dc-mar-sdk/actions/workflows/lint.yml) [![Unit tests](https://github.com/masonstoecker/dc-mar-sdk/actions/workflows/tests.yml/badge.svg)](https://github.com/masonstoecker/dc-mar-sdk/actions/workflows/tests.yml) [![Smoke (manual)](https://github.com/masonstoecker/dc-mar-sdk/actions/workflows/smoke.yml/badge.svg)](https://github.com/masonstoecker/dc-mar-sdk/actions/workflows/smoke.yml)
+[![Lint](https://github.com/glass-water-star/dc-mar-sdk/actions/workflows/lint.yml/badge.svg)](https://github.com/glass-water-star/dc-mar-sdk/actions/workflows/lint.yml) [![Unit tests](https://github.com/glass-water-star/dc-mar-sdk/actions/workflows/tests.yml/badge.svg)](https://github.com/glass-water-star/dc-mar-sdk/actions/workflows/tests.yml) [![Smoke (manual)](https://github.com/glass-water-star/dc-mar-sdk/actions/workflows/smoke.yml/badge.svg)](https://github.com/glass-water-star/dc-mar-sdk/actions/workflows/smoke.yml)
 
 A comprehensive Python SDK for the DC DataGate Master Address Repository (MAR) API with intelligent caching, telemetry tracking, and modern tooling.
 
@@ -54,35 +54,60 @@ The CLI also accepts --api-key on the command line for one-off runs.
 
 ### CLI Usage (common commands)
 
-- Drift check (full comparison). By default drift-check runs in safe, read-only probing mode (GET-only) and still respects robots.txt. To allow write-side methods (POST/PUT/PATCH/DELETE) explicitly pass --no-safe-read-only and understand the risks:
+- Drift check (full comparison). By default drift-check probes every documented
+  MAR operation and still respects robots.txt. Use `--safe-read-only` to limit
+  a run to GET operations:
 
 ```bash
 # Installed CLI:
- dc-mar-sdk-cli drift-check --api-key "$DC_MAR_API_KEY"
+ dc-mar-cli drift-check --api-key "$DC_MAR_API_KEY"
 # Local/dev (no install):
- uv run dc-mar-sdk-cli drift-check --api-key "$DC_MAR_API_KEY"
-# To include unsafe methods (explicit opt-in):
- dc-mar-sdk-cli drift-check --api-key "$DC_MAR_API_KEY" --no-safe-read-only
+ uv run dc-mar-cli drift-check --api-key "$DC_MAR_API_KEY"
+ # To limit the check to GET operations:
+ dc-mar-cli drift-check --api-key "$DC_MAR_API_KEY" --safe-read-only
 # Local/dev equivalent:
- uv run dc-mar-sdk-cli drift-check --api-key "$DC_MAR_API_KEY" --no-safe-read-only
+ uv run dc-mar-cli drift-check --api-key "$DC_MAR_API_KEY" --safe-read-only
 ```
 
 - Smoke drift (fast quick check):
 
 ```bash
 # Installed CLI:
-dc-mar-sdk-cli drift-smoke --api-key "$DC_MAR_API_KEY"
+dc-mar-cli drift-smoke --api-key "$DC_MAR_API_KEY"
 # Local/dev:
-uv run dc-mar-sdk-cli drift-smoke --api-key "$DC_MAR_API_KEY"
+uv run dc-mar-cli drift-smoke --api-key "$DC_MAR_API_KEY"
+```
+
+- Call any authoritative v2.2 operation. Use the exact Swagger path template
+  and provide each path value separately:
+
+```bash
+uv run dc-mar-cli api-request \
+  --method GET \
+  --operation '/api/v2.2/units/{marid}' \
+  --path-parameter marid=1234567
+```
+
+- Use validated, typed commands for the common MAR API families. These reject
+  malformed request data and fail if the live response violates its model:
+
+```bash
+uv run dc-mar-cli locations address "1600 Pennsylvania" --zones Ward
+uv run dc-mar-cli locations coordinates --longitude -77.0365 --latitude 38.8977
+uv run dc-mar-cli locations batch --address-base64 "MTYwMCBQZW5uc3lsdmFuaWE="
+uv run dc-mar-cli ssl lookup --square 0766 --lot 0038
+uv run dc-mar-cli units lookup --marid 308596
+uv run dc-mar-cli zone lookup "Ward 2"
+uv run dc-mar-cli autocomplete-body "1600 Pennsylvania"
 ```
 
 - Target a specific swagger spec file:
 
 ```bash
 # Installed CLI:
-dc-mar-sdk-cli drift-check --api-key "$DC_MAR_API_KEY" --swagger-file swagger/swagger.v7.json
+dc-mar-cli drift-check --api-key "$DC_MAR_API_KEY" --swagger-file swagger/swagger.v7.json
 # Local/dev:
-uv run dc-mar-sdk-cli drift-check --api-key "$DC_MAR_API_KEY" --swagger-file swagger/swagger.v7.json
+uv run dc-mar-cli drift-check --api-key "$DC_MAR_API_KEY" --swagger-file swagger/swagger.v7.json
 ```
 
 Notes:
@@ -97,6 +122,7 @@ Caching notes:
 
 ```python
 import logging
+import os
 from dc_mar_sdk import MARClient
 
 logging.basicConfig(level=logging.DEBUG)  # helpful while developing
@@ -108,7 +134,8 @@ async with MARClient(api_key=os.environ.get("DC_MAR_API_KEY")) as client:
 
 ### Web Dashboard
 
-Run the dashboard locally and open http://localhost:8000
+Run the dashboard locally and open http://localhost:8000. It intentionally binds
+to loopback only and is not designed for external or multi-user deployment.
 
 ```bash
 uv run uvicorn dc_mar_sdk.dashboard.app:app --reload
@@ -187,8 +214,8 @@ DC_RUN_SMOKE_TESTS=1 DC_MAR_API_KEY=... uv run pytest tests/test_drift_smoke.py
 uv run mypy src/
 
 # Formatting & linting
-uv run black src/
-uv run ruff check src/
+uv run ruff format .
+uv run ruff check .
 ```
 
 ### Release checks

@@ -1,4 +1,3 @@
-from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -12,6 +11,6 @@ class CachePolicy(BaseModel):
     """
 
     default_use_cache: bool = Field(True, description="Whether to use cache by default for operations")
-    autocomplete_ttl_seconds: Optional[int] = Field(None, description="Per-operation TTL for autocomplete")
-    search_ttl_seconds: Optional[int] = Field(None, description="Per-operation TTL for search")
+    autocomplete_ttl_seconds: int | None = Field(None, description="Per-operation TTL for autocomplete")
+    search_ttl_seconds: int | None = Field(None, description="Per-operation TTL for search")
     stale_while_revalidate: bool = Field(False, description="Optional SWR behavior (not active by default)")

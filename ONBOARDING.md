@@ -1,6 +1,6 @@
 ONBOARDING — API key quick start
 
-Note: The package import name is `dc_mar_sdk`. Use `import dc_mar_sdk` in your code. CLI entry points are `dc-mar-sdk-cli`, `dc-mar-sdk-release`, and `dc-mar-sdk-geocode-collect`.
+Note: The package import name is `dc_mar_sdk`. Use `import dc_mar_sdk` in your code. CLI entry points are `dc-mar-cli`, `dc-mar-sdk-release`, and `dc-mar-sdk-geocode-collect`.
 
 This short guide helps first-time users obtain, set, and verify the DC MAR API key so the CLI and Python client work on first run.
 
@@ -48,7 +48,7 @@ set DC_MAR_API_KEY=your_api_key_here
 - CLI flag (--api-key or -k) — good for one-off runs or ephemeral keys. Example:
 
 ```bash
-uv run dc-mar-sdk-cli analyze --query "1600 Pennsylvania" --api-key "your_api_key_here"
+uv run dc-mar-cli analyze --query "1600 Pennsylvania" --api-key "your_api_key_here"
 ```
 
 Notes:
@@ -73,10 +73,10 @@ Run a minimal CLI check (autocomplete)
 
 ```bash
 # using env var
-uv run dc-mar-sdk-cli autocomplete "1600 Pennsylvania"
+uv run dc-mar-cli autocomplete "1600 Pennsylvania"
 
 # using flag
-uv run dc-mar-sdk-cli autocomplete "1600 Pennsylvania" --api-key "$DC_MAR_API_KEY"
+uv run dc-mar-cli autocomplete "1600 Pennsylvania" --api-key "$DC_MAR_API_KEY"
 ```
 
 Raw API check with curl (shows HTTP status + response)
@@ -100,7 +100,7 @@ If you get JSON suggestions or HTTP 200 — key is valid.
 6) Troubleshooting checklist
 
 - Is DC_MAR_API_KEY visible in this shell? `echo "$DC_MAR_API_KEY"`
-- Does the CLI accept the key as a flag? `uv run dc-mar-sdk-cli autocomplete "1600 Pennsylvania" --api-key "$DC_MAR_API_KEY"`
+- Does the CLI accept the key as a flag? `uv run dc-mar-cli autocomplete "1600 Pennsylvania" --api-key "$DC_MAR_API_KEY"`
 - Inspect raw HTTP with curl to confirm header usage and server response status.
 - If you see permission errors, confirm the key hasn't expired or been revoked with your admin.
 

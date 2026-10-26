@@ -7,9 +7,9 @@ from dc_mar_sdk.tools.drift_detector import SwaggerValidator
 
 
 @pytest.mark.asyncio
-async def test_live_drift_smoke_respects_robots_and_has_no_critical_drift() -> None:
+async def test_live_drift_smoke_covers_all_operations_without_drift() -> None:
     """
-    Optional live smoke test.
+    Optional live smoke test covering every documented MAR operation.
 
     Enabled only when:
     - DC_RUN_SMOKE_TESTS=1
@@ -30,11 +30,16 @@ async def test_live_drift_smoke_respects_robots_and_has_no_critical_drift() -> N
     validator = SwaggerValidator(swagger_file, api_key)
 
     allowed, disallowed, robots_error = await validator.check_robots_txt(
-        user_agent="dc_mar_sdk-pytest-smoke"
+        user_agent="dc_mar_sdk-pytest-smoke",
+        include_unsafe_methods=True,
     )
     assert robots_error is None, robots_error
     assert allowed, f"robots.txt disallowed operations: {disallowed[:10]}"
 
-    results = await validator.test_all(user_agent="dc_mar_sdk-pytest-smoke")
+    results = await validator.test_all(
+        user_agent="dc_mar_sdk-pytest-smoke",
+        include_unsafe_methods=True,
+    )
+    assert len(results) == 33
     critical_errors = sum(1 for r in results for i in r.issues if i.severity == "error")
     assert critical_errors == 0

@@ -5,6 +5,8 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  schedule:
+    - cron: '17 8 * * *'
   workflow_dispatch:
     inputs:
       confirm:
@@ -19,14 +21,14 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.2
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
           python-version: '3.11'
       - name: Validate inputs and secrets
         run: |
-          if [ "${{ inputs.confirm }}" != "run" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.confirm }}" != "run" ]; then
             echo "Confirm input not set to 'run' - aborting."
             exit 1
           fi
@@ -34,7 +36,7 @@ jobs:
             echo "Missing required secret: DC_MAR_API_KEY"
             exit 1
           fi
-          if [ -n "${{ inputs.allowed_actors }}" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.allowed_actors }}" ]; then
             allowed="${{ inputs.allowed_actors }}"
             actor="${{ github.actor }}"
             IFS=',' read -ra arr <<< "$allowed"
@@ -51,11 +53,12 @@ jobs:
               exit 1
             fi
           fi
-      - name: Install uv and sync environment
-        run: |
-          python -m pip install --upgrade pip
-          pip install uv
-          uv sync --extra test
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.19"
+      - name: Sync environment
+        run: uv sync --locked --extra test
       - name: Run smoke tests
         env:
           DC_MAR_API_KEY: ${{ secrets.DC_MAR_API_KEY }}

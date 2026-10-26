@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dc_mar_sdk.cache.backends import InMemoryCache, SQLiteCache, CacheManager
+from dc_mar_sdk.cache.backends import CacheManager, InMemoryCache, SQLiteCache
 
 
 @pytest.mark.asyncio
@@ -26,14 +26,7 @@ async def test_inmemory_invalidation():
 
 @pytest.mark.asyncio
 async def test_sqlite_invalidation(tmp_path: Path):
-    # Create a DB path inside the repo (tmp_path provided by pytest)
-    db_dir = Path("tests") / ".cache_test"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    db_path = db_dir / "cache_test.db"
-
-    # Ensure clean state
-    if db_path.exists():
-        db_path.unlink()
+    db_path = tmp_path / "cache_test.db"
 
     backend = SQLiteCache(db_path=db_path)
     mgr = CacheManager(backend)
@@ -49,10 +42,3 @@ async def test_sqlite_invalidation(tmp_path: Path):
     assert await mgr.get("ns:item1") is None
     assert await mgr.get("ns:item2") is None
     assert await mgr.get("other:item") == {"v": 3}
-
-    # Cleanup DB file
-    try:
-        db_path.unlink()
-        db_dir.rmdir()
-    except Exception:
-        pass

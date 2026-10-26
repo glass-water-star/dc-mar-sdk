@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 readme = { file = "README.md", content-type = "text/markdown" }
 
-urls = { "Homepage" = "https://github.com/masonstoecker/dc-mar-sdk", "Repository" = "https://github.com/masonstoecker/dc-mar-sdk", "Bug Tracker" = "https://github.com/masonstoecker/dc-mar-sdk/issues" }
+urls = { "Homepage" = "https://github.com/glass-water-star/dc-mar-sdk", "Repository" = "https://github.com/glass-water-star/dc-mar-sdk", "Bug Tracker" = "https://github.com/glass-water-star/dc-mar-sdk/issues" }
 
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -42,7 +42,6 @@ dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
-    "black>=23.9.0",
     "ruff>=0.10.0",
     "mypy>=1.5.0",
 ]
@@ -60,7 +59,7 @@ test = [
 ]
 
 [project.scripts]
-dc-mar-sdk-cli = "dc_mar_sdk.cli.main:app"
+dc-mar-cli = "dc_mar_sdk.cli.main:app"
 dc-mar-sdk-release = "dc_mar_sdk.scripts.release:main"
 dc-mar-sdk-geocode-collect = "dc_mar_sdk.scripts.geocode_quality_collect:main"
 
@@ -69,19 +68,19 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=src/dc_mar_sdk --cov-report=term-missing"
 
-[tool.black]
-line-length = 100
-target-version = ["py311"]
-
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-select = ["E", "F", "W"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PIE", "RUF"]
+ignore = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dc_mar_sdk"]

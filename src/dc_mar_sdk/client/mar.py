@@ -6,42 +6,56 @@ Provides high-level interface to autocomplete, search, and geocoding endpoints.
 import hashlib
 import json
 import logging
+import random
+import time
+from asyncio import sleep
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, List, Optional
+from types import TracebackType
+from typing import Any, Self, TypeVar
 from urllib.parse import quote
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from dc_mar_sdk.cache import CacheBackend, CacheManager, SQLiteCache
+from dc_mar_sdk.cache import CacheBackend, CacheManager, CacheStats, SQLiteCache
+from dc_mar_sdk.client.cache_policy import CachePolicy
+from dc_mar_sdk.client.contracts import ContractValidationError
 from dc_mar_sdk.models import (
+    AddressBase64,
+    AddressInput,
     AddressMatch,
     AutocompleteResponse,
+    GeoAddressWithZonesListServiceResponse,
+    LocationBatchResponse,
+    LocationResultServiceResponse,
     MARResponseEnvelope,
     SearchResponse,
+    SSLInput,
+    UnitInput,
 )
+from dc_mar_sdk.operations import API_OPERATIONS, build_operation_path
+from dc_mar_sdk.settings import get_settings
 from dc_mar_sdk.telemetry import RequestMetrics, TelemetryDB
-from dc_mar_sdk.client.cache_policy import CachePolicy
 
 
 class DCMarClient:
     """Master Address Repository (MAR) SDK client."""
 
-    from dc_mar_sdk.settings import get_settings
-
     _SETTINGS = get_settings()
     BASE_URL = f"{_SETTINGS.mar_base_url}{_SETTINGS.mar_api_base_path}"
     logger = logging.getLogger(__name__)
+    _ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        cache_backend: Optional[CacheBackend] = None,
+        api_key: str | None = None,
+        cache_backend: CacheBackend | None = None,
         enable_telemetry: bool = True,
-        cache_ttl_seconds: Optional[int] = None,
-        timeout: Optional[int] = None,
-        cache_policy: Optional[CachePolicy] = None,
-    ):
+        cache_ttl_seconds: int | None = None,
+        timeout: int | None = None,
+        cache_policy: CachePolicy | None = None,
+    ) -> None:
         """
         Initialize MAR API client.
 
@@ -52,13 +66,16 @@ class DCMarClient:
             cache_ttl_seconds: Default cache TTL (default 1 hour)
             timeout: HTTP request timeout in seconds
         """
-        self.api_key = api_key
+        self.api_key = api_key or self._SETTINGS.mar_api_key or None
         self.cache_manager = CacheManager(cache_backend or SQLiteCache())
         self.enable_telemetry = enable_telemetry
         # prefer explicit args, otherwise use settings defaults (legacy fallback TTL)
         self.cache_ttl_seconds = cache_ttl_seconds or self._SETTINGS.default_cache_ttl_seconds
         self.timeout = timeout or self._SETTINGS.default_timeout_seconds
-        self._http_client: Optional[httpx.AsyncClient] = None
+        self.retry_max_attempts: int = self._SETTINGS.retry_max_attempts
+        self.retry_backoff_initial_seconds: float = self._SETTINGS.retry_backoff_initial_seconds
+        self.retry_backoff_max_seconds: float = self._SETTINGS.retry_backoff_max_seconds
+        self._http_client: httpx.AsyncClient | None = None
 
         # Cache policy: prefer explicit model, otherwise build from settings (non-breaking)
         if cache_policy is not None:
@@ -69,15 +86,21 @@ class DCMarClient:
                 default_use_cache=getattr(self._SETTINGS, "default_cache_use", True),
                 autocomplete_ttl_seconds=getattr(self._SETTINGS, "autocomplete_cache_ttl_seconds", None),
                 search_ttl_seconds=getattr(self._SETTINGS, "search_cache_ttl_seconds", None),
+                stale_while_revalidate=False,
             )
 
+        self.telemetry_db: TelemetryDB | None
         if enable_telemetry:
             telemetry_db_path = self._SETTINGS.telemetry_db_path
-            self.telemetry_db = TelemetryDB(Path(telemetry_db_path)) if telemetry_db_path else TelemetryDB()
+            self.telemetry_db = (
+                TelemetryDB(Path(telemetry_db_path), self._SETTINGS.telemetry_retention_days)
+                if telemetry_db_path
+                else TelemetryDB(retention_days=self._SETTINGS.telemetry_retention_days)
+            )
         else:
             self.telemetry_db = None
 
-    def _make_cache_key(self, endpoint: str, params: dict) -> str:
+    def _make_cache_key(self, endpoint: str, params: Mapping[str, Any]) -> str:
         """Generate a deterministic, namespaced cache key.
 
         Namespacing formula (stable & non-reversible):
@@ -98,10 +121,7 @@ class DCMarClient:
         base_norm = base.rstrip("/")
 
         # Compute non-reversible API key scope hash
-        if self.api_key:
-            api_scope_hash = hashlib.sha256(self.api_key.encode("utf-8")).hexdigest()
-        else:
-            api_scope_hash = "no_key"
+        api_scope_hash = hashlib.sha256(self.api_key.encode("utf-8")).hexdigest() if self.api_key else "no_key"
 
         # Namespace derived from base URL + api scope hash
         namespace_source = f"{base_norm}|{api_scope_hash}"
@@ -119,6 +139,51 @@ class DCMarClient:
             self._http_client = httpx.AsyncClient(timeout=self.timeout)
         return self._http_client
 
+    def _retry_delay_seconds(self, response: httpx.Response | None, attempt: int) -> float:
+        """Return the bounded retry delay, honoring a numeric Retry-After value."""
+        if response is not None:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return min(float(retry_after), float(self.retry_backoff_max_seconds))
+                except ValueError:
+                    pass
+        backoff = min(
+            float(self.retry_backoff_initial_seconds) * (2**attempt),
+            float(self.retry_backoff_max_seconds),
+        )
+        return random.uniform(0, backoff)
+
+    async def _send_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, str | int | float | bool | None] | None = None,
+        json_body: Any = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
+        """Send a MAR request with bounded retry handling for transient failures."""
+        client = await self._get_http_client()
+        last_transport_error: httpx.TransportError | None = None
+        for attempt in range(self.retry_max_attempts):
+            response: httpx.Response | None = None
+            try:
+                response = await client.request(method, url, params=params, json=json_body, headers=headers)
+            except httpx.TransportError as error:
+                last_transport_error = error
+            else:
+                if response.status_code != 429 and response.status_code < 500:
+                    return response
+
+            if attempt + 1 < self.retry_max_attempts:
+                await sleep(self._retry_delay_seconds(response, attempt))
+
+        if last_transport_error is not None:
+            raise last_transport_error
+        assert response is not None
+        return response
+
     def _log_model_break(
         self,
         *,
@@ -126,7 +191,7 @@ class DCMarClient:
         endpoint: str,
         payload: Any,
         error: Exception,
-        status_code: Optional[int] = None,
+        status_code: int | None = None,
         source: str = "api",
     ) -> None:
         """Emit debug log when payload cannot be validated into expected model."""
@@ -157,10 +222,10 @@ class DCMarClient:
         self,
         address: str,
         *,
-        use_cache: Optional[bool] = None,
+        use_cache: bool | None = None,
         refresh: bool = False,
-        ttl_seconds: Optional[int] = None,
-    ) -> List[str]:
+        ttl_seconds: int | None = None,
+    ) -> list[str]:
         """
         Get autocomplete suggestions for an address.
 
@@ -193,72 +258,246 @@ class DCMarClient:
         if effective_use_cache and not refresh:
             cached = await self.cache_manager.get(cache_key)
             if cached is not None:
-                if self.enable_telemetry:
-                    metrics = RequestMetrics(self.telemetry_db, endpoint)
-                    metrics.cached = True
-                    metrics.__enter__()
-                    metrics.__exit__(None, None, None)
-                return cached
+                if isinstance(cached, list) and all(isinstance(suggestion, str) for suggestion in cached):
+                    if self.enable_telemetry:
+                        assert self.telemetry_db is not None
+                        async with RequestMetrics(self.telemetry_db, endpoint) as metrics:
+                            metrics.cached = True
+                    return cached
+                await self.cache_manager.delete(cache_key)
 
-        try:
-            client = await self._get_http_client()
-            if self.enable_telemetry:
-                with RequestMetrics(self.telemetry_db, endpoint) as metrics:
-                    response = await client.get(
-                        f"{self.BASE_URL}{endpoint}/{quote(address, safe='')}",
-                        headers={
-                            "Accept": "application/json",
-                            "apiKey": self.api_key,
-                        },
-                    )
-                    metrics.status_code = response.status_code
-                    metrics.bytes_received = len(response.content)
-            else:
-                response = await client.get(
+        if self.enable_telemetry:
+            assert self.telemetry_db is not None
+            async with RequestMetrics(self.telemetry_db, endpoint) as metrics:
+                response = await self._send_request(
+                    "GET",
                     f"{self.BASE_URL}{endpoint}/{quote(address, safe='')}",
                     headers={
                         "Accept": "application/json",
                         "apiKey": self.api_key,
                     },
                 )
-
+                metrics.status_code = response.status_code
+                metrics.bytes_received = len(response.content)
+                response.raise_for_status()
+        else:
+            response = await self._send_request(
+                "GET",
+                f"{self.BASE_URL}{endpoint}/{quote(address, safe='')}",
+                headers={
+                    "Accept": "application/json",
+                    "apiKey": self.api_key,
+                },
+            )
             response.raise_for_status()
-            data = response.json()
-            envelope = MARResponseEnvelope.model_validate(data if isinstance(data, dict) else {"Result": data})
-            if not envelope.Success:
-                raise ValueError(f"Autocomplete failed: {envelope.Message or 'Unknown error'}")
-            suggestions = envelope.Result if isinstance(envelope.Result, list) else []
+        data = response.json()
+        if isinstance(data, dict) and "Success" not in data:
+            raise ValueError("Autocomplete response is missing required MAR envelope field: Success")
+        envelope = MARResponseEnvelope.model_validate(
+            data if isinstance(data, dict) else {"Result": data, "Success": True}
+        )
+        if not envelope.Success:
+            raise ValueError(f"Autocomplete failed: {envelope.Message or 'Unknown error'}")
+        suggestions = envelope.Result if isinstance(envelope.Result, list) else []
 
-            try:
-                validated = AutocompleteResponse.model_validate({"suggestions": suggestions})
-            except ValidationError as err:
-                self._log_model_break(
-                    model_name="AutocompleteResponse",
-                    endpoint=endpoint,
-                    payload={"suggestions": suggestions},
-                    error=err,
-                    status_code=response.status_code,
-                )
-                raise
+        try:
+            validated = AutocompleteResponse.model_validate({"suggestions": suggestions})
+        except ValidationError as err:
+            self._log_model_break(
+                model_name="AutocompleteResponse",
+                endpoint=endpoint,
+                payload={"suggestions": suggestions},
+                error=err,
+                status_code=response.status_code,
+            )
+            raise
 
-            # Cache result when caching enabled
-            if effective_use_cache:
-                await self.cache_manager.set(cache_key, validated.suggestions, effective_ttl)
+        # Cache result when caching enabled
+        if effective_use_cache:
+            await self.cache_manager.set(cache_key, validated.suggestions, effective_ttl)
 
-            return validated.suggestions
+        return validated.suggestions
 
-        except Exception as e:
+    async def request_operation(
+        self,
+        method: str,
+        operation: str,
+        *,
+        path_parameters: Mapping[str, object] | None = None,
+        query_parameters: Mapping[str, str | int | float | bool | None] | None = None,
+        json_body: Any = None,
+    ) -> Any:
+        """Call any operation published in the authoritative MAR v2.2 contract.
+
+        ``operation`` must be the Swagger path template, for example
+        ``/api/v2.2/units/{marid}``. This deliberately returns the unmodified
+        API JSON so callers retain all fields from endpoints without complete
+        response schemas in the upstream contract.
+        """
+        if not self.api_key:
+            raise ValueError("API key is required. Initialize client with api_key parameter.")
+
+        normalized_method = method.upper()
+        if (normalized_method, operation) not in API_OPERATIONS:
+            raise ValueError(f"Unsupported MAR v2.2 operation: {normalized_method} {operation}")
+
+        endpoint = build_operation_path(operation, path_parameters)
+        started_at = time.perf_counter()
+        response: httpx.Response | None = None
+        try:
+            response = await self._send_request(
+                normalized_method,
+                f"{self.BASE_URL}{endpoint}",
+                params=query_parameters,
+                json_body=json_body,
+                headers={"Accept": "application/json", "apiKey": self.api_key},
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as error:
             if self.enable_telemetry:
-                self.telemetry_db.record_request(
-                    endpoint=endpoint,
-                    status_code=500,
-                    error_message=str(e),
+                assert self.telemetry_db is not None
+                await self.telemetry_db.async_record_request(
+                    endpoint=operation,
+                    method=normalized_method,
+                    status_code=response.status_code if response is not None else None,
+                    response_time_ms=(time.perf_counter() - started_at) * 1000,
+                    bytes_received=len(response.content) if response is not None else 0,
+                    error_message=str(error),
                 )
             raise
+        finally:
+            if self.enable_telemetry and response is not None and response.status_code < 400:
+                assert self.telemetry_db is not None
+                await self.telemetry_db.async_record_request(
+                    endpoint=operation,
+                    method=normalized_method,
+                    status_code=response.status_code,
+                    response_time_ms=(time.perf_counter() - started_at) * 1000,
+                    bytes_received=len(response.content),
+                )
+
+    async def _request_typed_operation(
+        self,
+        method: str,
+        operation: str,
+        response_model: type[_ResponseModel],
+        *,
+        path_parameters: Mapping[str, object] | None = None,
+        query_parameters: Mapping[str, str | int | float | bool | None] | None = None,
+        json_body: Any = None,
+    ) -> _ResponseModel:
+        payload = await self.request_operation(
+            method,
+            operation,
+            path_parameters=path_parameters,
+            query_parameters=query_parameters,
+            json_body=json_body,
+        )
+        try:
+            return response_model.model_validate(payload)
+        except ValidationError as error:
+            raise ContractValidationError(method, operation, str(error)) from error
+
+    async def autocomplete_by_body(self, request: AddressInput) -> MARResponseEnvelope:
+        """Autocomplete using the documented JSON-body POST operation."""
+        return await self._request_typed_operation(
+            "POST",
+            "/api/v2.2/autocomplete",
+            MARResponseEnvelope,
+            json_body=request.model_dump(),
+        )
+
+    async def locate_address(
+        self, address: str, *, zones: str | None = None, geo: bool = False, method: str = "GET"
+    ) -> LocationResultServiceResponse:
+        """Look up an address and validate the complete location response."""
+        operation = "/api/v2.2/locations/{address}/{zones}/{geo}"
+        return await self._request_typed_operation(
+            method.upper(),
+            operation,
+            LocationResultServiceResponse,
+            path_parameters={"address": address, "zones": zones or "false", "geo": str(geo).lower()},
+        )
+
+    async def locate_coordinates(
+        self,
+        longitude: float,
+        latitude: float,
+        *,
+        count: int | None = None,
+        distance: float | None = None,
+        zones: str | None = None,
+        geo: bool = False,
+        method: str = "GET",
+    ) -> GeoAddressWithZonesListServiceResponse:
+        """Look up addresses near coordinates using a documented GET/POST route."""
+        latlong = f"{longitude},{latitude}"
+        if distance is not None:
+            operation = "/api/v2.2/locations/{latlong}/{distance}/{zones}/{geo}"
+            parameters = {
+                "latlong": latlong,
+                "distance": distance,
+                "zones": zones or "false",
+                "geo": str(geo).lower(),
+            }
+        elif count is not None:
+            operation = "/api/v2.2/locations/{latlong}/{count}/{zones}/{geo}"
+            parameters = {
+                "latlong": latlong,
+                "count": count,
+                "zones": zones or "false",
+                "geo": str(geo).lower(),
+            }
+        else:
+            operation = "/api/v2.2/locations/{latlong}/{zones}/{geo}"
+            parameters = {"latlong": latlong, "zones": zones or "false", "geo": str(geo).lower()}
+        return await self._request_typed_operation(
+            method.upper(), operation, GeoAddressWithZonesListServiceResponse, path_parameters=parameters
+        )
+
+    async def location_batch(
+        self,
+        request: AddressBase64,
+        *,
+        address_separator: str = ",",
+        sequence_separator: str = "|",
+        parallel: bool = False,
+    ) -> LocationBatchResponse:
+        """Run the documented body-based location batch operation."""
+        return await self._request_typed_operation(
+            "POST",
+            "/api/v2.2/locationbatch/{address_separator}/{chunkSequnce_separator}/{parallel}",
+            LocationBatchResponse,
+            path_parameters={
+                "address_separator": address_separator,
+                "chunkSequnce_separator": sequence_separator,
+                "parallel": str(parallel).lower(),
+            },
+            json_body=request.model_dump(),
+        )
+
+    async def lookup_ssl(self, request: SSLInput) -> MARResponseEnvelope:
+        """Look up SSL data through the documented POST body operation."""
+        return await self._request_typed_operation(
+            "POST", "/api/v2.2/ssls", MARResponseEnvelope, json_body=request.model_dump(exclude_none=True)
+        )
+
+    async def lookup_units(self, request: UnitInput) -> MARResponseEnvelope:
+        """Look up unit data through the documented POST body operation."""
+        return await self._request_typed_operation(
+            "POST", "/api/v2.2/units", MARResponseEnvelope, json_body=request.model_dump(exclude_none=True)
+        )
+
+    async def lookup_zone(self, zone: str) -> MARResponseEnvelope:
+        """Look up a zone through the documented GET operation."""
+        return await self._request_typed_operation(
+            "GET", "/api/v2.2/zone/{zone}", MARResponseEnvelope, path_parameters={"zone": zone}
+        )
 
     def _build_search_response_from_result(self, result: Any) -> SearchResponse:
         """Map MAR result payload into domain-level SearchResponse."""
-        addresses: List[Any] = []
+        addresses: list[Any] = []
         if isinstance(result, dict):
             raw_addresses = result.get("addresses") or result.get("blockAddresses") or []
             if isinstance(raw_addresses, list):
@@ -266,11 +505,11 @@ class DCMarClient:
         elif isinstance(result, list):
             addresses = result
 
-        matches: List[AddressMatch] = []
+        matches: list[AddressMatch] = []
         for entry in addresses:
             if not isinstance(entry, dict):
                 continue
-            props = {}
+            props: dict[str, Any] = {}
             address_obj = entry.get("address")
             if isinstance(address_obj, dict):
                 props = address_obj.get("properties") or {}
@@ -298,13 +537,13 @@ class DCMarClient:
     async def search(
         self,
         address: str,
-        radius: Optional[float] = None,
-        latitude: Optional[float] = None,
-        longitude: Optional[float] = None,
+        radius: float | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
         *,
-        use_cache: Optional[bool] = None,
+        use_cache: bool | None = None,
         refresh: bool = False,
-        ttl_seconds: Optional[int] = None,
+        ttl_seconds: int | None = None,
     ) -> SearchResponse:
         """
         Search for addresses matching criteria.
@@ -373,7 +612,8 @@ class DCMarClient:
             cached = await self.cache_manager.get(cache_key)
             if cached is not None:
                 if self.enable_telemetry:
-                    self.telemetry_db.record_request(endpoint, cached=True)
+                    assert self.telemetry_db is not None
+                    await self.telemetry_db.async_record_request(endpoint, cached=True)
                 try:
                     return SearchResponse.model_validate(cached)
                 except ValidationError as err:
@@ -386,82 +626,81 @@ class DCMarClient:
                     )
                     raise
 
-        try:
-            client = await self._get_http_client()
-            if self.enable_telemetry:
-                with RequestMetrics(self.telemetry_db, endpoint) as metrics:
-                    response = await client.get(
-                        f"{self.BASE_URL}{endpoint_path}",
-                        headers={
-                            "Accept": "application/json",
-                            "apiKey": self.api_key,
-                        },
-                    )
-                    metrics.status_code = response.status_code
-                    metrics.bytes_received = len(response.content)
-            else:
-                response = await client.get(
+        if self.enable_telemetry:
+            assert self.telemetry_db is not None
+            async with RequestMetrics(self.telemetry_db, endpoint) as metrics:
+                response = await self._send_request(
+                    "GET",
                     f"{self.BASE_URL}{endpoint_path}",
                     headers={
                         "Accept": "application/json",
                         "apiKey": self.api_key,
                     },
                 )
-
+                metrics.status_code = response.status_code
+                metrics.bytes_received = len(response.content)
+                response.raise_for_status()
+        else:
+            response = await self._send_request(
+                "GET",
+                f"{self.BASE_URL}{endpoint_path}",
+                headers={
+                    "Accept": "application/json",
+                    "apiKey": self.api_key,
+                },
+            )
             response.raise_for_status()
-            data = response.json()
-            envelope = MARResponseEnvelope.model_validate(data if isinstance(data, dict) else {"Result": data})
-            if not envelope.Success:
-                raise ValueError(f"Search failed: {envelope.Message or 'Unknown error'}")
+        data = response.json()
+        if isinstance(data, dict) and "Success" not in data:
+            raise ValueError("Search response is missing required MAR envelope field: Success")
+        envelope = MARResponseEnvelope.model_validate(
+            data if isinstance(data, dict) else {"Result": data, "Success": True}
+        )
+        if not envelope.Success:
+            raise ValueError(f"Search failed: {envelope.Message or 'Unknown error'}")
 
-            try:
-                mapped = self._build_search_response_from_result(envelope.Result)
-                validated = SearchResponse.model_validate(mapped.model_dump())
-            except ValidationError as err:
-                self._log_model_break(
-                    model_name="SearchResponse",
-                    endpoint=endpoint,
-                    payload=data,
-                    error=err,
-                    status_code=response.status_code,
-                )
-                raise
-
-            # Cache normalized domain response when caching enabled
-            if effective_use_cache:
-                await self.cache_manager.set(cache_key, validated.model_dump(), effective_ttl)
-            return validated
-
-        except Exception as e:
-            if self.enable_telemetry:
-                self.telemetry_db.record_request(
-                    endpoint=endpoint,
-                    status_code=500,
-                    error_message=str(e),
-                )
+        try:
+            mapped = self._build_search_response_from_result(envelope.Result)
+            validated = SearchResponse.model_validate(mapped.model_dump())
+        except ValidationError as err:
+            self._log_model_break(
+                model_name="SearchResponse",
+                endpoint=endpoint,
+                payload=data,
+                error=err,
+                status_code=response.status_code,
+            )
             raise
 
-    async def get_cache_stats(self) -> dict:
+        # Cache normalized domain response when caching enabled
+        if effective_use_cache:
+            await self.cache_manager.set(cache_key, validated.model_dump(), effective_ttl)
+        return validated
+
+    async def get_cache_stats(self) -> CacheStats:
         """Get cache statistics"""
         return await self.cache_manager.get_stats()
 
-    async def get_api_stats(self, hours: int = 24) -> dict:
+    async def get_api_stats(self, hours: int = 24) -> dict[str, Any]:
         """Get API usage statistics"""
         if not self.enable_telemetry:
             return {"error": "Telemetry not enabled"}
-        return self.telemetry_db.get_api_stats(hours)
+        assert self.telemetry_db is not None
+        return await self.telemetry_db.async_get_api_stats(hours)
 
-    async def get_endpoint_popularity(self, limit: int = 10) -> List[dict]:
+    async def get_endpoint_popularity(self, limit: int = 10) -> list[dict[str, Any]]:
         """Get most popular endpoints"""
         if not self.enable_telemetry:
             return []
-        return self.telemetry_db.get_endpoint_popularity(limit)
+        assert self.telemetry_db is not None
+        return await self.telemetry_db.async_get_endpoint_popularity(limit)
 
-    async def get_data_summary(self) -> dict:
+    async def get_data_summary(self) -> dict[str, Any]:
         """Get summary of all data collected from API"""
         if not self.enable_telemetry:
             return {"error": "Telemetry not enabled"}
-        return self.telemetry_db.get_data_summary()
+        assert self.telemetry_db is not None
+        return await self.telemetry_db.async_get_data_summary()
 
     async def clear_cache(self) -> None:
         """Clear all cache entries"""
@@ -473,11 +712,16 @@ class DCMarClient:
             await self._http_client.aclose()
             self._http_client = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         """Async context manager entry"""
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Async context manager exit"""
         await self.close()
 

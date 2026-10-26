@@ -7,12 +7,16 @@ import asyncio
 import csv
 import json
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from dc_mar_sdk import MARClient
+from dc_mar_sdk.client import ContractValidationError
+from dc_mar_sdk.models import AddressBase64, AddressInput, SSLInput, UnitInput
+from dc_mar_sdk.operations import API_OPERATIONS
 from dc_mar_sdk.settings import get_settings
 
 SETTINGS = get_settings()
@@ -21,6 +25,14 @@ SWAGGER_DIR = Path(SETTINGS.swagger_dir)
 API_BASE_URL = f"{SETTINGS.mar_base_url}{SETTINGS.mar_api_base_path}"
 
 app = typer.Typer(help="DC MAR SDK CLI - Query MAR API and manage cache")
+locations_app = typer.Typer(help="Typed location lookup commands")
+ssl_app = typer.Typer(help="Typed SSL lookup commands")
+units_app = typer.Typer(help="Typed unit lookup commands")
+zone_app = typer.Typer(help="Typed zone lookup commands")
+app.add_typer(locations_app, name="locations")
+app.add_typer(ssl_app, name="ssl")
+app.add_typer(units_app, name="units")
+app.add_typer(zone_app, name="zone")
 console = Console()
 
 
@@ -29,6 +41,232 @@ def get_api_key(api_key_option: str | None = None) -> str | None:
     if api_key_option:
         return api_key_option
     return SETTINGS.mar_api_key or None
+
+
+def parse_key_value_options(values: list[str], option_name: str) -> dict[str, str]:
+    """Parse repeatable KEY=VALUE CLI options."""
+    parsed: dict[str, str] = {}
+    for value in values:
+        key, separator, item_value = value.partition("=")
+        if not separator or not key:
+            raise typer.BadParameter(f"{option_name} entries must use KEY=VALUE")
+        if key in parsed:
+            raise typer.BadParameter(f"{option_name} contains duplicate key: {key}")
+        parsed[key] = item_value
+    return parsed
+
+
+def require_api_key(api_key_option: str | None) -> str:
+    """Return the requested API key or terminate with the standard CLI error."""
+    key = get_api_key(api_key_option)
+    if not key:
+        console.print("[bold red]Error: API key required[/]")
+        raise typer.Exit(1)
+    return key
+
+
+def print_typed_response(response: object) -> None:
+    """Render a Pydantic response with API field aliases preserved."""
+    console.print_json(response.model_dump_json(by_alias=True))  # type: ignore[attr-defined]
+
+
+@app.command("autocomplete-body")
+def autocomplete_body(
+    address: str = typer.Argument(..., help="Address prefix to autocomplete"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Autocomplete using the typed JSON-body POST operation."""
+    request = AddressInput(address=address)
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.autocomplete_by_body(request)
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@locations_app.command("address")
+def locations_address(
+    address: str = typer.Argument(..., help="Address to locate"),
+    zones: str | None = typer.Option(None, "--zones", help="Zone type to include, such as Ward"),
+    geo: bool = typer.Option(False, "--geo", help="Include geometry"),
+    method: str = typer.Option("GET", "--method", help="GET or POST route variant"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Locate an address with strict response validation."""
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.locate_address(address, zones=zones, geo=geo, method=method)
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@locations_app.command("coordinates")
+def locations_coordinates(
+    longitude: float = typer.Option(..., "--longitude"),
+    latitude: float = typer.Option(..., "--latitude"),
+    count: int | None = typer.Option(None, "--count"),
+    distance: float | None = typer.Option(None, "--distance"),
+    zones: str | None = typer.Option(None, "--zones", help="Zone type to include, such as Ward"),
+    geo: bool = typer.Option(False, "--geo"),
+    method: str = typer.Option("GET", "--method", help="GET or POST route variant"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Locate addresses near coordinates with strict response validation."""
+    if count is not None and distance is not None:
+        raise typer.BadParameter("--count and --distance cannot be combined")
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.locate_coordinates(
+                longitude, latitude, count=count, distance=distance, zones=zones, geo=geo, method=method
+            )
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@locations_app.command("batch")
+def locations_batch(
+    address_base64: str = typer.Option(..., "--address-base64"),
+    address_separator: str = typer.Option(",", "--address-separator"),
+    sequence_separator: str = typer.Option("|", "--sequence-separator"),
+    parallel: bool = typer.Option(False, "--parallel"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Run a typed location batch request."""
+    request = AddressBase64(address_base64=address_base64)
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.location_batch(
+                request, address_separator=address_separator, sequence_separator=sequence_separator, parallel=parallel
+            )
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@ssl_app.command("lookup")
+def ssl_lookup(
+    marid: str | None = typer.Option(None, "--marid"),
+    square: str | None = typer.Option(None, "--square"),
+    suffix: str | None = typer.Option(None, "--suffix"),
+    lot: str | None = typer.Option(None, "--lot"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Look up SSL data with a validated request body."""
+    request = SSLInput(marid=marid, square=square, suffix=suffix, lot=lot)
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.lookup_ssl(request)
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@units_app.command("lookup")
+def units_lookup(
+    marid: str = typer.Option(..., "--marid"),
+    unit_type: str | None = typer.Option(None, "--type"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Look up MAR units with a validated request body."""
+    request = UnitInput(marid=marid, type=unit_type)
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.lookup_units(request)
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@zone_app.command("lookup")
+def zone_lookup(
+    value: str = typer.Argument(..., help="Zone name or identifier"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k"),
+) -> None:
+    """Look up a zone with strict response validation."""
+
+    async def run() -> None:
+        async with MARClient(api_key=require_api_key(api_key)) as client:
+            response = await client.lookup_zone(value)
+        print_typed_response(response)
+
+    try:
+        asyncio.run(run())
+    except ContractValidationError as error:
+        console.print(f"[bold red]Contract validation failed:[/] {error}")
+        raise typer.Exit(1) from error
+
+
+@app.command("api-request")
+def api_request(
+    method: str = typer.Option(..., "--method", "-X", help="Swagger method: GET or POST"),
+    operation: str = typer.Option(..., "--operation", help="Exact Swagger operation template"),
+    path_parameter: list[str] = typer.Option([], "--path-parameter", "-p", help="Path KEY=VALUE (repeatable)"),
+    query_parameter: list[str] = typer.Option([], "--query-parameter", "-q", help="Query KEY=VALUE (repeatable)"),
+    body: str | None = typer.Option(None, "--body", help="JSON request body"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k", help="API key (or set env DC_MAR_API_KEY)"),
+) -> None:
+    """Call any of the 33 authoritative MAR v2.2 operations."""
+    normalized_method = method.upper()
+    if (normalized_method, operation) not in API_OPERATIONS:
+        raise typer.BadParameter("method and operation must match the authoritative MAR v2.2 contract")
+
+    try:
+        path_parameters = parse_key_value_options(path_parameter, "--path-parameter")
+        query_parameters = parse_key_value_options(query_parameter, "--query-parameter")
+        json_body = json.loads(body) if body is not None else None
+    except json.JSONDecodeError as error:
+        raise typer.BadParameter(f"--body must be valid JSON: {error.msg}") from error
+
+    key = get_api_key(api_key)
+    if not key:
+        console.print("[bold red]Error: API key required[/]")
+        raise typer.Exit(1)
+
+    async def run() -> None:
+        async with MARClient(api_key=key) as client:
+            response = await client.request_operation(
+                normalized_method,
+                operation,
+                path_parameters=path_parameters,
+                query_parameters=query_parameters,
+                json_body=json_body,
+            )
+        console.print_json(json.dumps(response))
+
+    asyncio.run(run())
 
 
 @app.command()
@@ -41,7 +279,7 @@ def autocomplete(
         "-k",
         help="API key (or set env DC_MAR_API_KEY)",
     ),
-    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this call"),  # noqa: FBT003
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache for this call"),
 ) -> None:
     """Get autocomplete suggestions for an address."""
 
@@ -59,7 +297,7 @@ def autocomplete(
             console.print(f'[bold green]Suggestions for "{address}":[/]')
             for i, suggestion in enumerate(suggestions, 1):
                 console.print(f"  {i}. {suggestion}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             console.print(f"[bold red]Error:[/] {e}")
 
     asyncio.run(run())
@@ -93,7 +331,7 @@ def analyze(
             return
 
         client = MARClient(api_key=key)
-        results = []
+        results: list[dict[str, Any]] = []
 
         # Single query or batch from file
         if addresses_file:
@@ -102,11 +340,17 @@ def analyze(
                 if addresses_file.endswith(".csv"):
                     with Path(addresses_file).open() as f:
                         reader = csv.DictReader(f)
-                        addresses = [row.get("address") or row.get("Address") for row in reader if row]
+                        addresses = [
+                            address
+                            for row in reader
+                            if row
+                            and isinstance((address := row.get("address") or row.get("Address")), str)
+                            and address
+                        ]
                 else:
                     with Path(addresses_file).open() as f:
                         data = json.load(f)
-                        addresses = data if isinstance(data, list) else [data]
+                        addresses = [str(value) for value in data] if isinstance(data, list) else [str(data)]
             except (OSError, json.JSONDecodeError) as e:
                 console.print(f"[bold red]Error reading file: {e}[/]")
                 return
@@ -119,18 +363,22 @@ def analyze(
             for i, addr in enumerate(addresses, 1):
                 try:
                     matches = await client.autocomplete(addr)
-                    results.append({
-                        "address": addr,
-                        "standardized": matches[0] if matches else None,
-                        "alternatives": matches[1:3] if len(matches) > 1 else [],
-                        "match_count": len(matches),
-                    })
+                    results.append(
+                        {
+                            "address": addr,
+                            "standardized": matches[0] if matches else None,
+                            "alternatives": matches[1:3] if len(matches) > 1 else [],
+                            "match_count": len(matches),
+                        }
+                    )
                     status.update(f"[bold green]Processed {i}/{len(addresses)}...")
-                except Exception as e:  # noqa: BLE001
-                    results.append({
-                        "address": addr,
-                        "error": str(e),
-                    })
+                except Exception as e:
+                    results.append(
+                        {
+                            "address": addr,
+                            "error": str(e),
+                        }
+                    )
 
                 # Rate limiting
                 await asyncio.sleep(0.05)
@@ -152,8 +400,8 @@ def analyze(
             else:
                 status_str = "? No match"
             table.add_row(
-                result["address"],
-                result.get("standardized", "")[:40],
+                str(result["address"]),
+                str(result.get("standardized") or "")[:40],
                 str(result.get("match_count", 0)),
                 status_str,
             )
@@ -172,13 +420,15 @@ def analyze(
                         writer = csv.DictWriter(f, fieldnames=["address", "standardized", "match_count"])
                         writer.writeheader()
                         for r in results:
-                            writer.writerow({
-                                "address": r["address"],
-                                "standardized": r.get("standardized", ""),
-                                "match_count": r.get("match_count", 0),
-                            })
+                            writer.writerow(
+                                {
+                                    "address": r["address"],
+                                    "standardized": r.get("standardized", ""),
+                                    "match_count": r.get("match_count", 0),
+                                }
+                            )
                     console.print(f"\n✓ CSV exported to {output}")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 console.print(f"[bold red]Error exporting: {e}[/]")
 
         # Show telemetry
@@ -342,16 +592,16 @@ def drift_check(
         help="User-Agent used for robots.txt and API requests",
     ),
     safe_read_only: bool = typer.Option(
-        True,
+        False,
         "--safe-read-only/--no-safe-read-only",
-        help="Only probe GET operations; use --no-safe-read-only to allow unsafe methods",
+        help="Only probe GET operations; by default, probe every documented MAR operation",
     ),
     operation: list[str] | None = typer.Option(
         None,
         "--operation",
-        help="Optional allowlist entry like \"GET /api/v2.2/units\" (repeatable)",
+        help='Optional allowlist entry like "GET /api/v2.2/units" (repeatable)',
     ),
-):
+) -> None:
     """Check for API drift between Swagger spec and actual responses"""
 
     key = get_api_key(api_key)
@@ -423,11 +673,7 @@ def drift_check(
                     severity = f"🟡 {warn_count} warning(s)"
 
             table.add_row(
-                result.method.upper(),
-                result.endpoint,
-                status,
-                f"{len(result.issues)} issue(s)",
-                severity or "✓"
+                result.method.upper(), result.endpoint, status, f"{len(result.issues)} issue(s)", severity or "✓"
             )
 
         console.print(table)
@@ -482,7 +728,7 @@ def drift_smoke(
         "--include-unsafe-methods",
         help="Also probe POST/PUT/PATCH/DELETE operations in smoke test",
     ),
-):
+) -> None:
     """Run a lightweight live smoke test for drift + robots compliance."""
 
     key = get_api_key(api_key)
@@ -535,13 +781,13 @@ def drift_smoke(
 
 
 @app.command()
-def swagger_list(
-):
+def swagger_list() -> None:
     """List all available Swagger spec versions"""
     swagger_dir = SWAGGER_DIR
 
     try:
         from dc_mar_sdk.tools.swagger_manager import SwaggerManager
+
         manager = SwaggerManager(swagger_dir, "")  # Don't need API key to list
 
         versions = manager.list_versions()
@@ -562,9 +808,9 @@ def swagger_list(
             table.add_row(str(v["version"]), v["path"], v["size"], v["modified"])
 
         console.print(table)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(f"[red]Error: {e}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -575,7 +821,7 @@ def swagger_fix(
         help="DC MAR API Key (or use DC_MAR_API_KEY env var)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-):
+) -> None:
     """Automatically fix Swagger spec drift by introspecting actual API responses"""
 
     key = get_api_key(api_key)
@@ -585,7 +831,7 @@ def swagger_fix(
 
     swagger_dir = SWAGGER_DIR
 
-    async def run():
+    async def run() -> int:
         try:
             from dc_mar_sdk.tools.swagger_manager import SwaggerManager
 
@@ -623,13 +869,14 @@ def swagger_fix(
             console.print("  Validation: ✓ Passed")
             console.print("\n[bold]Next steps:[/]")
             console.print("  1. Review the updated swagger.json")
-            console.print("  2. Test with: uv run dc-mar-sdk-cli drift-check")
+            console.print("  2. Test with: uv run dc-mar-cli drift-check")
             console.print("  3. Commit changes if satisfied")
 
             return 0
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             console.print(f"[red]Error: {e}[/]")
             import traceback
+
             if verbose:
                 traceback.print_exc()
             return 1
@@ -644,15 +891,16 @@ def swagger_reset(
         None,
         "--version",
         "-v",
-        help="Version to reset to, or \"list\" to show available versions",
+        help='Version to reset to, or "list" to show available versions',
     ),
-):
+) -> None:
     """Reset Swagger spec to a previous version"""
 
     swagger_dir = SWAGGER_DIR
 
     try:
         from dc_mar_sdk.tools.swagger_manager import SwaggerManager
+
         manager = SwaggerManager(swagger_dir, "")
 
         console.print("\n[bold cyan]🔄 Swagger Version Reset[/]\n")
@@ -678,14 +926,14 @@ def swagger_reset(
             console.print(table)
             console.print()
             console.print("[bold]To reset to a version, run:[/]")
-            console.print("  uv run dc-mar-sdk-cli swagger-reset --version VERSION")
+            console.print("  uv run dc-mar-cli swagger-reset --version VERSION")
             return
 
         try:
             target_version = int(version)
         except ValueError:
             console.print("[red]Error: --version must be an integer or 'list'[/]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
         # Reset to specified version
         console.print(f"[bold]Resetting to version {target_version}...[/]\n")
@@ -700,13 +948,13 @@ def swagger_reset(
         console.print("\n[green]✅ Reset complete![/]")
         console.print("  Validation: ✓ Passed")
         console.print("[bold]Next steps:[/]")
-        console.print("  1. Test with: uv run dc-mar-sdk-cli drift-check")
+        console.print("  1. Test with: uv run dc-mar-cli drift-check")
         console.print("  2. Review changes")
         console.print("  3. Commit if satisfied")
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(f"[red]Error: {e}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -722,7 +970,7 @@ def swagger_heal(
         help="Path to Swagger/OpenAPI JSON file",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-):
+) -> None:
     """Self-healing flow: detect drift, fix swagger, and verify."""
 
     key = get_api_key(api_key)
@@ -745,7 +993,7 @@ def swagger_heal(
         pre_critical = sum(1 for r in pre_results for i in r.issues if i.severity == "error")
         console.print(f"Before fix: {pre_critical} critical drift issue(s)")
 
-        manager = SwaggerManager(SWAGGER_DIR, key)
+        manager = SwaggerManager(swagger_path.parent, key, swagger_path.name)
         summary = await manager.run_fix_workflow(verbose=verbose)
         console.print(
             f"Fix summary: tested={summary['tested']} successful={summary['successful']} updated={summary['updated']}"

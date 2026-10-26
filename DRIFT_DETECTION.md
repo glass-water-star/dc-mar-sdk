@@ -26,14 +26,14 @@ API drift occurs when:
 ```bash
 # Basic usage (requires API key)
 # NOTE: drift-check is safe-by-default and only probes GET operations. To allow write-style methods use --no-safe-read-only.
-uv run dc-mar-sdk-cli drift-check --api-key YOUR_API_KEY
+uv run dc-mar-cli drift-check --api-key YOUR_API_KEY
 
 # Using environment variable
 export DC_MAR_API_KEY=YOUR_API_KEY
-uv run dc-mar-sdk-cli drift-check
+uv run dc-mar-cli drift-check
 
 # To explicitly include unsafe methods (POST/PUT/PATCH/DELETE):
-uv run dc-mar-sdk-cli drift-check --api-key YOUR_API_KEY --no-safe-read-only
+uv run dc-mar-cli drift-check --api-key YOUR_API_KEY --no-safe-read-only
 ```
 
 ### Programmatically
@@ -183,7 +183,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
-      - run: uv run dc-mar-sdk-cli drift-check --api-key ${{ secrets.DC_MAR_API_KEY }}
+      - run: uv run dc-mar-cli drift-check --api-key ${{ secrets.DC_MAR_API_KEY }}
 ```
 
 ### When Drift is Detected

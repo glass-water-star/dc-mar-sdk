@@ -10,16 +10,23 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Literal, TypedDict
 from urllib.parse import quote
 
 import httpx
 
 
+class SwaggerVersion(TypedDict):
+    version: int | Literal["current"]
+    path: str
+    size: str
+    modified: str
+
+
 class SwaggerManager:
     """Manages Swagger spec versions and generates updated specs from actual API"""
 
-    def __init__(self, swagger_dir: Path, api_key: str):
+    def __init__(self, swagger_dir: Path, api_key: str, swagger_file_name: str | None = None):
         self.swagger_dir = Path(swagger_dir)
         self.api_key = api_key
         from dc_mar_sdk.settings import get_settings
@@ -27,30 +34,31 @@ class SwaggerManager:
         _SETTINGS = get_settings()
         self.base_url = _SETTINGS.mar_base_url  # Endpoints include api path in settings
         self.swagger_dir.mkdir(parents=True, exist_ok=True)
-        self.swagger_file_name = _SETTINGS.swagger_file_name
-        self.current_spec = self._load_swagger(self.swagger_dir / self.swagger_file_name)
+        self.swagger_file_name = swagger_file_name or _SETTINGS.swagger_file_name
+        self.current_spec = self._load_swagger(self.swagger_dir / self.swagger_file_name) or {}
 
-    def _load_swagger(self, path: Path) -> Optional[Dict[str, Any]]:
+    def _load_swagger(self, path: Path) -> dict[str, Any] | None:
         """Load Swagger spec from file"""
         if not path.exists():
             return None
         try:
             with open(path) as f:
-                return json.load(f)
-        except Exception as e:
+                loaded = json.load(f)
+            return loaded if isinstance(loaded, dict) else None
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Failed to load {path}: {e}")
             return None
 
-    def _save_swagger(self, spec: Dict[str, Any], path: Path) -> None:
+    def _save_swagger(self, spec: dict[str, Any], path: Path) -> None:
         """Save Swagger spec to file"""
         with open(path, "w") as f:
             json.dump(spec, f, indent=2)
         print(f"✓ Saved: {path}")
 
-    def validate_swagger_file(self, path: Optional[Path] = None) -> tuple[bool, List[str]]:
+    def validate_swagger_file(self, path: Path | None = None) -> tuple[bool, list[str]]:
         """Validate basic Swagger/OpenAPI structure."""
         target = path or (self.swagger_dir / self.swagger_file_name)
-        issues: List[str] = []
+        issues: list[str] = []
 
         if not target.exists():
             return False, [f"Missing file: {target}"]
@@ -72,36 +80,40 @@ class SwaggerManager:
 
         return len(issues) == 0, issues
 
-    def list_versions(self) -> List[Dict[str, str]]:
+    def list_versions(self) -> list[SwaggerVersion]:
         """List all available Swagger versions"""
-        versions = []
+        versions: list[SwaggerVersion] = []
 
         # Check for versioned files
         for path in sorted(self.swagger_dir.glob("swagger.v*.json")):
             match = path.stem.replace("swagger.v", "")
             if match.isdigit():
                 stat = path.stat()
-                versions.append({
-                    "version": int(match),
-                    "path": str(path),
-                    "size": f"{stat.st_size / 1024:.1f} KB",
-                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                })
+                versions.append(
+                    {
+                        "version": int(match),
+                        "path": str(path),
+                        "size": f"{stat.st_size / 1024:.1f} KB",
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    }
+                )
 
         # Add current (unversioned)
         current_path = self.swagger_dir / self.swagger_file_name
         if current_path.exists():
             stat = current_path.stat()
-            versions.append({
-                "version": "current",
-                "path": str(current_path),
-                "size": f"{stat.st_size / 1024:.1f} KB",
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            })
+            versions.append(
+                {
+                    "version": "current",
+                    "path": str(current_path),
+                    "size": f"{stat.st_size / 1024:.1f} KB",
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+            )
 
         return versions
 
-    def _infer_schema_from_response(self, response: Any, param_name: str = None) -> Dict[str, Any]:
+    def _infer_schema_from_response(self, response: Any, param_name: str | None = None) -> dict[str, Any]:
         """Generate JSON schema from actual API response"""
         if response is None:
             # OpenAPI 3.0-friendly nullable fallback without forcing a concrete type.
@@ -120,21 +132,21 @@ class SwaggerManager:
             # Infer from up to first 5 items, merging to capture shape variation.
             item_schemas = [self._infer_schema_from_response(item) for item in response[:5]]
             item_schema = item_schemas[0]
-            for schema in item_schemas[1:]:
-                item_schema = self._merge_schemas(item_schema, schema)
+            for additional_schema in item_schemas[1:]:
+                item_schema = self._merge_schemas(item_schema, additional_schema)
             return {"type": "array", "items": item_schema}
         if isinstance(response, dict):
             properties = {}
             for key, value in response.items():
                 properties[key] = self._infer_schema_from_response(value, key)
-            schema: Dict[str, Any] = {
+            object_schema: dict[str, Any] = {
                 "type": "object",
                 "properties": properties,
             }
-            return schema
+            return object_schema
         return {"type": "string"}
 
-    def _merge_type(self, left: Optional[Any], right: Optional[Any]) -> Optional[Any]:
+    def _merge_type(self, left: Any | None, right: Any | None) -> Any | None:
         left_types = left if isinstance(left, list) else ([left] if left else [])
         right_types = right if isinstance(right, list) else ([right] if right else [])
         merged = []
@@ -145,7 +157,7 @@ class SwaggerManager:
             return None
         return merged[0] if len(merged) == 1 else merged
 
-    def _merge_schemas(self, left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_schemas(self, left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         if not left:
             return right
         if not right:
@@ -154,7 +166,7 @@ class SwaggerManager:
         merged_type = self._merge_type(left.get("type"), right.get("type"))
         merged_nullable = bool(left.get("nullable")) or bool(right.get("nullable"))
 
-        merged: Dict[str, Any] = {}
+        merged: dict[str, Any] = {}
         if merged_type is not None:
             merged["type"] = merged_type
         if merged_nullable:
@@ -171,7 +183,7 @@ class SwaggerManager:
             left_props = left.get("properties", {}) if left_is_object else {}
             right_props = right.get("properties", {}) if right_is_object else {}
             all_keys = sorted(set(left_props.keys()) | set(right_props.keys()))
-            props: Dict[str, Any] = {}
+            props: dict[str, Any] = {}
             for key in all_keys:
                 if key in left_props and key in right_props:
                     props[key] = self._merge_schemas(left_props[key], right_props[key])
@@ -188,15 +200,15 @@ class SwaggerManager:
 
         return merged
 
-    def _iter_operations(self, spec: Dict[str, Any]) -> List[tuple[str, str, Dict[str, Any]]]:
-        operations: List[tuple[str, str, Dict[str, Any]]] = []
+    def _iter_operations(self, spec: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+        operations: list[tuple[str, str, dict[str, Any]]] = []
         for endpoint_path, path_item in spec.get("paths", {}).items():
             for method in ("get", "post", "put", "patch", "delete"):
                 if method in path_item:
                     operations.append((endpoint_path, method, path_item[method]))
         return operations
 
-    def _build_request_payload(self, operation: Dict[str, Any]) -> Optional[Any]:
+    def _build_request_payload(self, operation: dict[str, Any]) -> Any | None:
         body = operation.get("requestBody", {})
         content = body.get("content", {})
         for content_type in (
@@ -211,14 +223,21 @@ class SwaggerManager:
                 return self._sample_from_schema(schema)
         return None
 
-    def _resolve_schema_ref(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _resolve_schema_ref(self, schema: dict[str, Any]) -> dict[str, Any]:
         ref = schema.get("$ref")
         if not ref or not ref.startswith("#/components/schemas/"):
             return schema
         name = ref.split("/")[-1]
-        return self.current_spec.get("components", {}).get("schemas", {}).get(name, schema)
+        components = self.current_spec.get("components")
+        if not isinstance(components, dict):
+            return schema
+        schemas = components.get("schemas")
+        if not isinstance(schemas, dict):
+            return schema
+        resolved = schemas.get(name)
+        return resolved if isinstance(resolved, dict) else schema
 
-    def _sample_from_schema(self, schema: Dict[str, Any]) -> Any:
+    def _sample_from_schema(self, schema: dict[str, Any]) -> Any:
         if not schema:
             return {}
         schema = self._resolve_schema_ref(schema)
@@ -243,21 +262,22 @@ class SwaggerManager:
         return {}
 
     async def _test_endpoint(
-        self, endpoint_path: str, method: str, operation: Dict[str, Any], test_params: Optional[Dict] = None
-    ) -> Optional[Dict[str, Any]]:
+        self,
+        endpoint_path: str,
+        method: str,
+        operation: dict[str, Any],
+        test_params: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
         """Call an endpoint and get actual response"""
         try:
             # Substitute path parameters with test values
             url = f"{self.base_url}{endpoint_path}"
 
             # Extract parameters from the path
-            params = re.findall(r'\{(\w+)\}', endpoint_path)
+            params = re.findall(r"\{(\w+)\}", endpoint_path)
+            test_params = test_params or {}
             for param_name in params:
-                if param_name in test_params:
-                    value = test_params[param_name]
-                else:
-                    # Use default value
-                    value = f"test_{param_name}"
+                value = test_params.get(param_name, f"test_{param_name}")
 
                 url = url.replace(f"{{{param_name}}}", quote(str(value), safe=""))
 
@@ -274,12 +294,13 @@ class SwaggerManager:
                 )
 
                 if response.status_code == 200:
-                    return response.json()
+                    payload = response.json()
+                    return payload if isinstance(payload, dict) else None
                 return None
         except Exception:
             return None
 
-    async def generate_corrected_swagger(self, verbose: bool = False) -> tuple[Dict[str, Any], Dict[str, int]]:
+    async def generate_corrected_swagger(self, verbose: bool = False) -> tuple[dict[str, Any], dict[str, int]]:
         """Generate a new Swagger spec based on actual API responses"""
         if not self.current_spec:
             raise ValueError("No current Swagger spec loaded")
@@ -337,7 +358,7 @@ class SwaggerManager:
             inferred_schema = self._infer_schema_from_response(response)
 
             # Update all content types with the inferred schema
-            for content_type in content.keys():
+            for content_type in content:
                 old_schema = content[content_type].get("schema", {})
                 old_schema_str = json.dumps(old_schema)
                 new_schema_str = json.dumps(inferred_schema)
@@ -382,7 +403,7 @@ class SwaggerManager:
         print(f"✓ Backed up as: swagger.v{next_version}.json")
         return next_version
 
-    def apply_corrected_spec(self, corrected_spec: Dict[str, Any]) -> int:
+    def apply_corrected_spec(self, corrected_spec: dict[str, Any]) -> int:
         """Backup current and apply corrected spec as new current"""
         # Backup current
         version = self.backup_current()
@@ -421,7 +442,7 @@ class SwaggerManager:
         self._save_swagger(spec, current_path)
         print(f"✓ Restored from: swagger.v{version}.json")
 
-    async def run_fix_workflow(self, verbose: bool = False) -> Dict[str, Any]:
+    async def run_fix_workflow(self, verbose: bool = False) -> dict[str, Any]:
         """Complete workflow: test API, generate corrected spec, apply it"""
         # Generate corrected spec
         corrected, stats = await self.generate_corrected_swagger(verbose=verbose)

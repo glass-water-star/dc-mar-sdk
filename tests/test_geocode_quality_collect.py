@@ -1,4 +1,4 @@
-from dc_mar_sdk.scripts.geocode_quality_collect import normalize_score, quality_bucket, perturb_address
+from dc_mar_sdk.scripts.geocode_quality_collect import normalize_score, perturb_address, quality_bucket
 
 
 def test_normalize_score_handles_both_scales():

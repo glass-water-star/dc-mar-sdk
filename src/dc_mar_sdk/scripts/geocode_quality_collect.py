@@ -157,8 +157,8 @@ async def fetch_robots_policy(base_url: str, user_agent: str) -> RobotsPolicy:
         if line.lower().startswith("crawl-delay:"):
             try:
                 crawl_delay = int(line.split(":", 1)[1].strip())
-            except Exception:
-                pass
+            except ValueError:
+                continue
 
     parser = RobotFileParser()
     parser.parse(txt.splitlines())
@@ -300,7 +300,16 @@ async def run_collection(args: argparse.Namespace) -> int:
             except Exception as exc:
                 row["error"] = str(exc)
 
-            row["quality_bucket"] = quality_bucket(row["score_100"], row["match_count"], row["error"])
+            score_100 = row["score_100"]
+            match_count = row["match_count"]
+            error = row["error"]
+            if not isinstance(score_100, (float, type(None))):
+                raise TypeError("score_100 must be a float or None")
+            if not isinstance(match_count, int):
+                raise TypeError("match_count must be an integer")
+            if not isinstance(error, (str, type(None))):
+                raise TypeError("error must be a string or None")
+            row["quality_bucket"] = quality_bucket(score_100, match_count, error)
             rows.append(row)
             print(
                 f"[{idx}/{len(sample_addresses)}] {address} -> "

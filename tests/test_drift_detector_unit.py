@@ -75,9 +75,7 @@ def test_validate_type_and_missing_fields(tmp_path):
         "/t": {
             "get": {
                 "responses": {
-                    "200": {
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}
-                    }
+                    "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Thing"}}}}
                 }
             }
         }
@@ -107,3 +105,27 @@ def test_validate_type_and_missing_fields(tmp_path):
     issues3 = v._validate_type({"id": "notint", "name": "ok"}, schema, path="$")
     type_errs = [i for i in issues3 if i.get("type_error") and "Expected integer" in i.get("type_error")]
     assert len(type_errs) == 1
+
+
+def test_known_live_contract_shapes_conform_without_warnings(tmp_path):
+    p = tmp_path / "s4.json"
+    p.write_text(json.dumps(_make_swagger({})))
+    validator = SwaggerValidator(str(p), api_key="k")
+
+    envelope_issues = validator._validate_response(
+        {"Result": ["1600 PENNSYLVANIA AVENUE NW"], "Success": True, "Message": None},
+        {"type": "array", "items": {"type": "string"}},
+        "/api/v2.2/autocomplete/{address}",
+        "get",
+        200,
+    )
+    dynamic_issues = validator._validate_response(
+        {"Result": {"addresses": []}, "Success": True, "Message": None},
+        {"type": "object"},
+        "/api/v2.2/locations/{geo}",
+        "post",
+        200,
+    )
+
+    assert envelope_issues == []
+    assert dynamic_issues == []

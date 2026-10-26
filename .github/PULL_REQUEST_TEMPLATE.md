@@ -9,7 +9,7 @@ What does this change do? Link to the issue if one exists.
 - [ ] Linked issue (if applicable)
 - [ ] Tests added or updated
 - [ ] All tests pass (uv run pytest)
-- [ ] Code formatted (black) and lint checked (ruff)
+- [ ] Code Ruff-formatted and lint-free
 - [ ] Type checks pass (mypy)
 - [ ] Documentation updated if required
 

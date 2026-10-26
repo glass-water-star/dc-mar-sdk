@@ -8,16 +8,21 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dc-mar-sdk
+    permissions:
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.2
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
           python-version: '3.11'
-      - name: Install build deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.19"
       - name: Ensure CHANGELOG contains release notes
         run: |
           # Extract version from tag 'vX.Y.Z'
@@ -28,10 +33,20 @@ jobs:
             echo "Ensure you updated CHANGELOG.md (moved Unreleased -> $VERSION) before tagging." >&2
             exit 1
           fi
+      - name: Ensure package version matches tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          PACKAGE_VERSION=$(python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as file:
+              print(tomllib.load(file)["project"]["version"])
+          PY
+          )
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "ERROR: tag version $VERSION does not match pyproject.toml version $PACKAGE_VERSION" >&2
+            exit 1
+          fi
       - name: Build distributions
-        run: python -m build
+        run: uv build
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.6.0
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

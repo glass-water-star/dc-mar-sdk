@@ -37,8 +37,8 @@ def find_hygiene_artifacts(root_dir: Path) -> list[Path]:
     for pyc_file in root_dir.rglob("*.pyc"):
         if not _is_ignored_path(pyc_file):
             artifacts.append(pyc_file)
-    for cache_dir in (".pytest_cache", ".ruff_cache"):
-        p = root_dir / cache_dir
+    for artifact_name in (".pytest_cache", ".ruff_cache"):
+        p = root_dir / artifact_name
         if p.exists():
             artifacts.append(p)
 
@@ -70,9 +70,7 @@ def enforce_hygiene(root_dir: Path, fix_hygiene: bool) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run release quality checks (lint, unit tests, optional smoke test)."
-    )
+    parser = argparse.ArgumentParser(description="Run release quality checks (lint, unit tests, optional smoke test).")
     parser.add_argument(
         "--smoke",
         action="store_true",
@@ -96,16 +94,36 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def find_project_root(start_dir: Path) -> Path | None:
+    """Find a source checkout containing the release configuration."""
+    for candidate in (start_dir, *start_dir.parents):
+        if (candidate / "pyproject.toml").is_file() and (candidate / "tests").is_dir():
+            return candidate
+    return None
+
+
 def main() -> int:
     args = parse_args()
-    root_dir = Path(__file__).resolve().parents[3]
+    root_dir = find_project_root(Path.cwd())
+    if root_dir is None:
+        print(
+            "Error: dc-mar-sdk-release must run from a dc-mar-sdk source checkout.",
+            file=sys.stderr,
+        )
+        return 2
 
     hygiene_status = enforce_hygiene(root_dir, args.fix_hygiene)
     if hygiene_status != 0:
         return hygiene_status
 
+    print("==> Checking Ruff formatting")
+    run(["uv", "run", "--extra", "dev", "ruff", "format", "--check", "."], cwd=root_dir)
+
     print("==> Running Ruff lint checks")
-    run(["uv", "run", "--extra", "dev", "ruff", "check", "src", "tests"], cwd=root_dir)
+    run(["uv", "run", "--extra", "dev", "ruff", "check", "."], cwd=root_dir)
+
+    print("==> Running strict mypy checks")
+    run(["uv", "run", "--extra", "dev", "mypy", "src"], cwd=root_dir)
 
     print("==> Running unit tests")
     run(["uv", "run", "--extra", "test", "pytest", "tests", "-q"], cwd=root_dir)
@@ -119,7 +137,7 @@ def main() -> int:
             [
                 "uv",
                 "run",
-                "dc-mar-sdk-cli",
+                "dc-mar-cli",
                 "drift-smoke",
                 "--api-key",
                 args.api_key,

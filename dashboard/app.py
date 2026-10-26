@@ -2,7 +2,6 @@
 
 from dc_mar_sdk.dashboard.app import app  # noqa: F401
 
-
 if __name__ == "__main__":
     import uvicorn
 

@@ -20,7 +20,7 @@ Release flow (recommended)
    - uv run dc-mar-sdk-release  # preferred public script name (legacy: dc-mar-sdk-release still available)
    - If generated artifacts are present: uv run dc-mar-sdk-release --fix-hygiene
    - For a local smoke test: uv run dc-mar-sdk-release --smoke --api-key "$DC_MAR_API_KEY"
-   This runs repository hygiene checks, ruff linting, and pytest and will exit non-zero on failures.
+   This runs repository hygiene checks, Ruff formatting/lint checks, and pytest and will exit non-zero on failures.
 4. Commit the version bump and changelog update:
    - git add pyproject.toml CHANGELOG.md
    - git commit -m "chore(release): vX.Y.Z"
@@ -36,16 +36,19 @@ Release flow (recommended)
        - export PYPI_API_TOKEN="<token>"
        - python -m twine upload -u __token__ -p "$PYPI_API_TOKEN" dist/*
    - Automated publish (GitHub Actions):
-     - Add a repository secret named PYPI_API_TOKEN containing a PyPI API token with "Upload" scope.
-     - Push an annotated tag (see checklist step 5); a tag push will trigger the release workflow which builds and publishes the wheel to PyPI automatically.
-     - See .github/workflows/publish.yml for an example workflow using the official pypa/gh-action-pypi-publish action.
+     - Configure the `pypi` GitHub Actions environment as a PyPI trusted publisher
+       for this repository and the `dc-mar-sdk` project. This is a one-time PyPI
+       configuration; no long-lived PyPI API token is stored in GitHub.
+     - Push an annotated tag (see checklist step 5); the release workflow builds
+       and publishes the wheel using GitHub's short-lived OIDC identity.
+     - See `.github/workflows/publish.yml` for the pinned trusted-publishing action.
    - Alternatively use your normal publishing flow (hatch publish, custom CI, etc.)
 
 Quality gates (what dc-mar-sdk-release runs)
 ------------------------------------------
-- Ruff lint checks over source, CLI, and tests
+- Ruff formatting and lint checks over the repository
+- Strict mypy checks over the package source
 - Repository hygiene check (fails on generated artifacts like __pycache__, *.pyc, .pytest_cache, .ruff_cache unless `--fix-hygiene` is used)
-- Ruff lint checks over source and tests
 - Pytest unit test suite (tests/)
 - Optional local smoke test (CLI drift-smoke) when `--smoke` is passed and DC_MAR_API_KEY provided
 
@@ -90,4 +93,3 @@ Process for breaking changes
 - All breaking changes must be reviewed and approved in a release PR with clear changelog entries and migration examples. The release checklist (above) must include confirmation that deprecation requirements were met prior to removal.
 
 This policy aims to balance forward progress with stability for integrators and downstream consumers.
-

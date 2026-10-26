@@ -6,6 +6,7 @@ business/visualization opportunities.
 
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -15,19 +16,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from dc_mar_sdk import MARClient
 
 
+def get_api_key() -> str | None:
+    """Return the MAR API key currently exported by the shell."""
+    return os.getenv("DC_MAR_API_KEY") or None
+
+
 async def explore_api():
     """Explore DC MAR API capabilities and data patterns."""
 
-    client = MARClient(enable_telemetry=True)
+    api_key = get_api_key()
+    if not api_key:
+        print("Error: API key required. Set DC_MAR_API_KEY before running this script.", file=sys.stderr)
+        return
+
+    client = MARClient(api_key=api_key, enable_telemetry=True)
 
     results = {
         "exploration_date": datetime.now().isoformat(),
         "tests": [],
     }
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("🔍 DC MAR API EXPLORATION")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     # Test 1: Basic autocomplete
     print("Test 1: Basic Autocomplete")
@@ -46,18 +57,22 @@ async def explore_api():
             if suggestions:
                 print(f"    → Examples: {', '.join(suggestions[:3])}")
 
-            results["tests"].append({
-                "type": "autocomplete",
-                "query": addr,
-                "suggestion_count": len(suggestions),
-                "first_suggestions": suggestions[:3] if suggestions else [],
-            })
+            results["tests"].append(
+                {
+                    "type": "autocomplete",
+                    "query": addr,
+                    "suggestion_count": len(suggestions),
+                    "first_suggestions": suggestions[:3] if suggestions else [],
+                }
+            )
     except Exception as e:
         print(f"  ✗ Error: {e}")
-        results["tests"].append({
-            "type": "autocomplete",
-            "error": str(e),
-        })
+        results["tests"].append(
+            {
+                "type": "autocomplete",
+                "error": str(e),
+            }
+        )
 
     print()
 
@@ -69,8 +84,6 @@ async def explore_api():
         addr = "1600 Pennsylvania Avenue"
 
         result1 = await client.autocomplete(addr)
-        cache_stats_before = await client.get_cache_stats()
-
         result2 = await client.autocomplete(addr)
         cache_stats_after = await client.get_cache_stats()
 
@@ -83,11 +96,13 @@ async def explore_api():
         print(f"    → Misses: {cache_stats_after.get('misses', 0)}")
         print(f"    → Hit Rate: {cache_stats_after.get('hit_rate', 0):.1f}%")
 
-        results["tests"].append({
-            "type": "cache_effectiveness",
-            "query": addr,
-            "cache_stats": cache_stats_after,
-        })
+        results["tests"].append(
+            {
+                "type": "cache_effectiveness",
+                "query": addr,
+                "cache_stats": cache_stats_after,
+            }
+        )
     except Exception as e:
         print(f"  ✗ Error: {e}")
 
@@ -120,12 +135,14 @@ async def explore_api():
         avg_time = sum(times) / len(times)
         print(f"\n  ✓ Average response time: {avg_time:.1f}ms")
 
-        results["tests"].append({
-            "type": "response_time",
-            "queries": queries,
-            "response_times_ms": times,
-            "avg_response_time_ms": avg_time,
-        })
+        results["tests"].append(
+            {
+                "type": "response_time",
+                "queries": queries,
+                "response_times_ms": times,
+                "avg_response_time_ms": avg_time,
+            }
+        )
     except Exception as e:
         print(f"  ✗ Error: {e}")
 
@@ -157,9 +174,9 @@ async def explore_api():
     print()
 
     # Get telemetry summary
-    print("="*60)
+    print("=" * 60)
     print("📊 TELEMETRY SUMMARY")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     try:
         api_stats = await client.get_api_stats(hours=1)

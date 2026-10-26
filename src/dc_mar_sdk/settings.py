@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from functools import lru_cache
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     - DC_SWAGGER_DIR
     - DC_SWAGGER_FILE
     - DC_MAR_API_KEY (used elsewhere by scripts/CLI)
+    - DC_TELEMETRY_RETENTION_DAYS
+    - DC_RETRY_MAX_ATTEMPTS
+    - DC_RETRY_BACKOFF_INITIAL_SECONDS
+    - DC_RETRY_BACKOFF_MAX_SECONDS
     """
 
     mar_base_url: str = Field("https://datagate.dc.gov/mar/open")
@@ -28,17 +32,21 @@ class Settings(BaseSettings):
 
     default_timeout_seconds: int = Field(30)
     default_cache_ttl_seconds: int = Field(3600)
+    retry_max_attempts: int = Field(3, ge=1)
+    retry_backoff_initial_seconds: float = Field(0.25, ge=0)
+    retry_backoff_max_seconds: float = Field(2.0, ge=0)
 
     # Optional cache policy defaults (when provided they are advisory only and do not
     # change existing behavior unless callers opt into the policy-aware client APIs).
     default_cache_use: bool = Field(True)
-    autocomplete_cache_ttl_seconds: Optional[int] = Field(None)
-    search_cache_ttl_seconds: Optional[int] = Field(None)
+    autocomplete_cache_ttl_seconds: int | None = Field(None)
+    search_cache_ttl_seconds: int | None = Field(None)
 
     drift_user_agent: str = Field("dc-mar-sdk-drift-check")
     default_user_agent: str = Field("dc-mar-sdk/0.1")
     mar_api_key: str = Field("")
-    telemetry_db_path: Optional[str] = Field(None)
+    telemetry_db_path: str | None = Field(None)
+    telemetry_retention_days: int = Field(30)
 
     swagger_dir: str = Field("swagger")
     swagger_file_name: str = Field("swagger.json")

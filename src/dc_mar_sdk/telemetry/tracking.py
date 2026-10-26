@@ -3,26 +3,33 @@ Telemetry system for tracking API usage, cache metrics, and data analytics.
 Stores metrics in SQLite for local analysis.
 """
 
+import asyncio
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from types import TracebackType
+from typing import Any, Self
 
 
 class TelemetryDB:
     """SQLite-backed telemetry database for API usage tracking"""
 
-    def __init__(self, db_path: Path = None):
+    def __init__(self, db_path: Path | None = None, retention_days: int = 30):
         if db_path is None:
             db_path = Path.home() / ".cache" / "dc_mar_sdk" / "telemetry.db"
 
         self.db_path = Path(db_path)
+        self.retention_days = retention_days
+        self._last_prune_at = 0.0
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self) -> None:
         """Initialize telemetry database schema"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS api_requests (
@@ -76,21 +83,43 @@ class TelemetryDB:
                 )
                 """
             )
+            self._prune_retained_data(conn)
             conn.commit()
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """Open a short-lived connection that is always closed after each operation."""
+        conn = sqlite3.connect(self.db_path, timeout=5)
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            yield conn
+        finally:
+            conn.close()
+
+    def _prune_retained_data(self, conn: sqlite3.Connection) -> None:
+        """Bound historical metric storage while retaining recent operational data."""
+        cutoff = time.time() - (self.retention_days * 86400)
+        for table in ("api_requests", "cache_metrics", "data_summary"):
+            conn.execute(f"DELETE FROM {table} WHERE timestamp < ?", (cutoff,))
+        conn.execute("DELETE FROM endpoint_popularity WHERE last_called < ?", (cutoff,))
 
     def record_request(
         self,
         endpoint: str,
         method: str = "GET",
-        status_code: Optional[int] = None,
-        response_time_ms: Optional[float] = None,
+        status_code: int | None = None,
+        response_time_ms: float | None = None,
         bytes_sent: int = 0,
         bytes_received: int = 0,
         cached: bool = False,
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
     ) -> None:
         """Record an API request"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
+            now = time.time()
+            if now - self._last_prune_at >= 3600:
+                self._prune_retained_data(conn)
+                self._last_prune_at = now
             conn.execute(
                 """
                 INSERT INTO api_requests
@@ -99,7 +128,7 @@ class TelemetryDB:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    time.time(),
+                    now,
                     endpoint,
                     method,
                     status_code,
@@ -129,14 +158,38 @@ class TelemetryDB:
                     endpoint,
                     response_time_ms or 0,
                     response_time_ms or 0,
-                    time.time(),
+                    now,
                     1 if error_message else 0,
-                    time.time(),
+                    now,
                     1 if error_message else 0,
                 ),
             )
 
             conn.commit()
+
+    async def async_record_request(
+        self,
+        endpoint: str,
+        method: str = "GET",
+        status_code: int | None = None,
+        response_time_ms: float | None = None,
+        bytes_sent: int = 0,
+        bytes_received: int = 0,
+        cached: bool = False,
+        error_message: str | None = None,
+    ) -> None:
+        """Record request telemetry without blocking an async caller."""
+        await asyncio.to_thread(
+            self.record_request,
+            endpoint,
+            method,
+            status_code,
+            response_time_ms,
+            bytes_sent,
+            bytes_received,
+            cached,
+            error_message,
+        )
 
     def record_cache_metrics(
         self,
@@ -147,7 +200,7 @@ class TelemetryDB:
         size_bytes: int = 0,
     ) -> None:
         """Record cache metrics snapshot"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO cache_metrics
@@ -158,11 +211,11 @@ class TelemetryDB:
             )
             conn.commit()
 
-    def get_api_stats(self, hours: int = 24) -> Dict[str, Any]:
+    def get_api_stats(self, hours: int = 24) -> dict[str, Any]:
         """Get API statistics for the last N hours"""
         cutoff_time = time.time() - (hours * 3600)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             cursor = conn.cursor()
 
             # Total requests
@@ -212,9 +265,13 @@ class TelemetryDB:
                 "error_count": error_count,
             }
 
-    def get_endpoint_popularity(self, limit: int = 10) -> List[Dict[str, Any]]:
+    async def async_get_api_stats(self, hours: int = 24) -> dict[str, Any]:
+        """Read API statistics without blocking an async caller."""
+        return await asyncio.to_thread(self.get_api_stats, hours)
+
+    def get_endpoint_popularity(self, limit: int = 10) -> list[dict[str, Any]]:
         """Get most frequently called endpoints"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -235,10 +292,14 @@ class TelemetryDB:
 
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_endpoint_error_rates(self, hours: int = 24, limit: int = 20) -> List[Dict[str, Any]]:
+    async def async_get_endpoint_popularity(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Read endpoint popularity without blocking an async caller."""
+        return await asyncio.to_thread(self.get_endpoint_popularity, limit)
+
+    def get_endpoint_error_rates(self, hours: int = 24, limit: int = 20) -> list[dict[str, Any]]:
         """Get endpoint-level request, error, and latency metrics for a recent window."""
         cutoff_time = time.time() - (hours * 3600)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -274,7 +335,11 @@ class TelemetryDB:
                 )
             return rows
 
-    def get_timeseries_stats(self, hours: int = 24, bucket: str = "hour") -> List[Dict[str, Any]]:
+    async def async_get_endpoint_error_rates(self, hours: int = 24, limit: int = 20) -> list[dict[str, Any]]:
+        """Read endpoint error rates without blocking an async caller."""
+        return await asyncio.to_thread(self.get_endpoint_error_rates, hours, limit)
+
+    def get_timeseries_stats(self, hours: int = 24, bucket: str = "hour") -> list[dict[str, Any]]:
         """Get request and error trends over time."""
         cutoff_time = time.time() - (hours * 3600)
         bucket_fmt_map = {
@@ -285,7 +350,7 @@ class TelemetryDB:
             raise ValueError("bucket must be one of: hour, day")
         bucket_fmt = bucket_fmt_map[bucket]
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -306,10 +371,14 @@ class TelemetryDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def detect_anomalies(self, hours: int = 24) -> List[Dict[str, Any]]:
+    async def async_get_timeseries_stats(self, hours: int = 24, bucket: str = "hour") -> list[dict[str, Any]]:
+        """Read timeseries statistics without blocking an async caller."""
+        return await asyncio.to_thread(self.get_timeseries_stats, hours, bucket)
+
+    def detect_anomalies(self, hours: int = 24) -> list[dict[str, Any]]:
         """Return lightweight anomaly signals from recent telemetry."""
         stats = self.get_api_stats(hours)
-        anomalies: List[Dict[str, Any]] = []
+        anomalies: list[dict[str, Any]] = []
 
         total_requests = stats.get("total_requests", 0) or 0
         error_count = stats.get("error_count", 0) or 0
@@ -351,11 +420,15 @@ class TelemetryDB:
 
         return anomalies
 
-    def get_cache_efficiency(self, hours: int = 24) -> Dict[str, Any]:
+    async def async_detect_anomalies(self, hours: int = 24) -> list[dict[str, Any]]:
+        """Detect anomalies without blocking an async caller."""
+        return await asyncio.to_thread(self.detect_anomalies, hours)
+
+    def get_cache_efficiency(self, hours: int = 24) -> dict[str, Any]:
         """Analyze cache efficiency metrics"""
         cutoff_time = time.time() - (hours * 3600)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             cursor = conn.cursor()
 
             # Get latest cache metrics
@@ -388,9 +461,9 @@ class TelemetryDB:
                 "total_cache_requests": total_requests,
             }
 
-    def get_data_summary(self) -> Dict[str, Any]:
+    def get_data_summary(self) -> dict[str, Any]:
         """Get overall data collection summary"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             cursor = conn.cursor()
 
             # All-time stats
@@ -426,11 +499,15 @@ class TelemetryDB:
                 "db_path": str(self.db_path),
             }
 
+    async def async_get_data_summary(self) -> dict[str, Any]:
+        """Read data summary without blocking an async caller."""
+        return await asyncio.to_thread(self.get_data_summary)
+
     def clear_old_records(self, days: int = 30) -> int:
         """Remove records older than N days"""
         cutoff_time = time.time() - (days * 86400)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             cursor = conn.cursor()
 
             cursor.execute("DELETE FROM api_requests WHERE timestamp < ?", (cutoff_time,))
@@ -449,18 +526,23 @@ class RequestMetrics:
         self.telemetry_db = telemetry_db
         self.endpoint = endpoint
         self.method = method
-        self.start_time = None
-        self.bytes_sent = 0
-        self.bytes_received = 0
-        self.cached = False
-        self.status_code = None
-        self.error_message = None
+        self.start_time: float | None = None
+        self.bytes_sent: int = 0
+        self.bytes_received: int = 0
+        self.cached: bool = False
+        self.status_code: int | None = None
+        self.error_message: str | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.start_time = time.time()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         response_time_ms = (time.time() - self.start_time) * 1000 if self.start_time else 0
 
         if exc_type is not None:
@@ -477,17 +559,22 @@ class RequestMetrics:
             error_message=self.error_message,
         )
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         self.start_time = time.time()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         response_time_ms = (time.time() - self.start_time) * 1000 if self.start_time else 0
 
         if exc_type is not None:
             self.error_message = str(exc_val)
 
-        self.telemetry_db.record_request(
+        await self.telemetry_db.async_record_request(
             endpoint=self.endpoint,
             method=self.method,
             status_code=self.status_code,

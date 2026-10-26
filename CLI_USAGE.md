@@ -11,14 +11,14 @@ export DC_MAR_API_KEY="your_api_key_here"
 
 Then all commands will automatically use your key:
 ```bash
-uv run dc-mar-sdk-cli analyze
+uv run dc-mar-cli analyze
 ```
 
 ### Option 2: Command-line Flag
 ```bash
-uv run dc-mar-sdk-cli analyze --api-key "your_api_key_here"
+uv run dc-mar-cli analyze --api-key "your_api_key_here"
 # Or short form:
-uv run dc-mar-sdk-cli analyze -k "your_api_key_here"
+uv run dc-mar-cli analyze -k "your_api_key_here"
 ```
 
 ---
@@ -29,7 +29,7 @@ uv run dc-mar-sdk-cli analyze -k "your_api_key_here"
 
 Note: The CLI's `autocomplete` command supports `--no-cache` to bypass local cache for that single invocation (it does not clear the global cache).
 ```bash
-uv run dc-mar-sdk-cli analyze -q "1600 Pennsylvania Avenue"
+uv run dc-mar-cli analyze -q "1600 Pennsylvania Avenue"
 ```
 
 Output:
@@ -63,7 +63,7 @@ address
 
 Then analyze:
 ```bash
-uv run dc-mar-sdk-cli analyze --file addresses.csv --output results.csv
+uv run dc-mar-cli analyze --file addresses.csv --output results.csv
 ```
 
 Output:
@@ -97,19 +97,19 @@ Create `addresses.json`:
 
 Then analyze and export as GeoJSON:
 ```bash
-uv run dc-mar-sdk-cli analyze --file addresses.json --output results.geojson
+uv run dc-mar-cli analyze --file addresses.json --output results.geojson
 ```
 
 ### 4. Export to Multiple Formats
 
 **CSV Export:**
 ```bash
-uv run dc-mar-sdk-cli analyze --file addresses.json --output results.csv
+uv run dc-mar-cli analyze --file addresses.json --output results.csv
 ```
 
 **GeoJSON Export:**
 ```bash
-uv run dc-mar-sdk-cli analyze --file addresses.json --output results.geojson
+uv run dc-mar-cli analyze --file addresses.json --output results.geojson
 ```
 
 ---
@@ -119,25 +119,25 @@ uv run dc-mar-sdk-cli analyze --file addresses.json --output results.geojson
 ### Basic Usage
 ```bash
 # Single query with default address
-uv run dc-mar-sdk-cli analyze
+uv run dc-mar-cli analyze
 
 # Custom single query
-uv run dc-mar-sdk-cli analyze --query "1600 Pennsylvania"
+uv run dc-mar-cli analyze --query "1600 Pennsylvania"
 
 # With API key flag
-uv run dc-mar-sdk-cli analyze --query "1600 Pennsylvania" --api-key "YOUR_KEY"
+uv run dc-mar-cli analyze --query "1600 Pennsylvania" --api-key "YOUR_KEY"
 ```
 
 ### Batch Processing
 ```bash
 # From CSV file
-uv run dc-mar-sdk-cli analyze --file addresses.csv
+uv run dc-mar-cli analyze --file addresses.csv
 
 # From JSON file
-uv run dc-mar-sdk-cli analyze --file addresses.json
+uv run dc-mar-cli analyze --file addresses.json
 
 # With output export
-uv run dc-mar-sdk-cli analyze --file addresses.csv --output results.geojson
+uv run dc-mar-cli analyze --file addresses.csv --output results.geojson
 ```
 
 ### Options
@@ -192,7 +192,7 @@ echo "address
 789 Elm Rd" > messy_addresses.csv
 
 # 2. Standardize and export
-uv run dc-mar-sdk-cli analyze --file messy_addresses.csv --output clean_addresses.csv
+uv run dc-mar-cli analyze --file messy_addresses.csv --output clean_addresses.csv
 
 # 3. Use the output for your application
 cat clean_addresses.csv
@@ -201,7 +201,7 @@ cat clean_addresses.csv
 ### Workflow 2: Verify Multiple Locations
 ```bash
 # 1. Query multiple addresses
-uv run dc-mar-sdk-cli analyze --file locations.json --output verification.geojson
+uv run dc-mar-cli analyze --file locations.json --output verification.geojson
 
 # 2. Import GeoJSON into mapping tool (QGIS, Mapbox, etc.)
 # 3. Verify on map
@@ -210,7 +210,7 @@ uv run dc-mar-sdk-cli analyze --file locations.json --output verification.geojso
 ### Workflow 3: Bulk Geocoding for Data Science
 ```bash
 # 1. Analyze addresses
-uv run dc-mar-sdk-cli analyze --file property_list.csv --output geocoded.csv
+uv run dc-mar-cli analyze --file property_list.csv --output geocoded.csv
 
 # 2. Import into pandas for further analysis
 python3 << 'EOF'
@@ -240,12 +240,12 @@ Each analyze run automatically tracks:
 
 View cumulative stats:
 ```bash
-uv run dc-mar-sdk-cli api-stats --hours 24
+uv run dc-mar-cli api-stats --hours 24
 ```
 
 View cache effectiveness:
 ```bash
-uv run dc-mar-sdk-cli cache-status
+uv run dc-mar-cli cache-status
 ```
 
 ---
@@ -258,13 +258,13 @@ uv run dc-mar-sdk-cli cache-status
 export DC_MAR_API_KEY="your_key"
 
 # Then use without flags
-uv run dc-mar-sdk-cli analyze --file addresses.csv --output results.csv
+uv run dc-mar-cli analyze --file addresses.csv --output results.csv
 ```
 
 ### 2. Leverage Caching
 - First run: API queries executed
 - Second run with same data: Results come from cache (faster!)
-- Clear cache if needed: `uv run dc-mar-sdk-cli cache-clear`
+- Clear cache if needed: `uv run dc-mar-cli cache-clear`
 
 ### 3. Rate Limiting
 The CLI automatically includes 50ms delays between requests to be respectful of the API.
@@ -307,19 +307,19 @@ Error exporting: Output must end with .csv or .geojson
 
 ### Use CSV with Excel/Google Sheets
 ```bash
-uv run dc-mar-sdk-cli analyze --file input.csv --output output.csv
+uv run dc-mar-cli analyze --file input.csv --output output.csv
 # Then open output.csv in Excel or Google Sheets
 ```
 
 ### Use GeoJSON with Web Maps
 ```bash
-uv run dc-mar-sdk-cli analyze --file locations.csv --output map.geojson
+uv run dc-mar-cli analyze --file locations.csv --output map.geojson
 # Then upload to Mapbox, Leaflet, or QGIS
 ```
 
 ### Use with Python/Pandas
 ```bash
-uv run dc-mar-sdk-cli analyze --file addresses.csv --output standardized.csv
+uv run dc-mar-cli analyze --file addresses.csv --output standardized.csv
 
 # In your Python script:
 import pandas as pd
@@ -332,7 +332,7 @@ print(df.head())
 ## Next Steps
 
 1. **Get API Key**: Request from DC Data Team (data.dev@dc.gov)
-2. **Test**: Run single query: `uv run dc-mar-sdk-cli analyze`
+2. **Test**: Run single query: `uv run dc-mar-cli analyze`
 3. **Batch Process**: Use CSV file with your addresses
 4. **Export**: Save results as CSV or GeoJSON
 5. **Analyze**: Use in your visualization or analysis tool
