@@ -14,25 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.2
       - name: Extract changelog for tag
-        id: changelog
         run: |
           set -euo pipefail
           VERSION=${GITHUB_REF#refs/tags/v}
           # Extract the changelog section for the exact version. Stop at the next '## [' header.
-          awk -v ver="$VERSION" '
-            BEGIN{found=0}
-            /^## \[/{ if(found && /^## \[/){exit} }
-            { if($0 ~ ("## \\"" ver "\\"]")){found=1; print; next} if(found) print }
+          awk -v header="## [$VERSION]" '
+            index($0, header) == 1 { found = 1 }
+            found && index($0, header) != 1 && /^## \[/ { exit }
+            found { print }
           ' CHANGELOG.md > changelog.md
 
           if [ ! -s changelog.md ]; then
             echo "No changelog entry found for $VERSION" >&2
             exit 1
           fi
-
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          cat changelog.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
